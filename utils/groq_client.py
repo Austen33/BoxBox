@@ -22,8 +22,41 @@ Rules for every response:
 - The current year is 2026. Always refer to the 2026 F1 season. If search results mention 2025, treat that as last season's data and flag it as such rather than presenting it as current."""
 
 
+def _estimate_tokens(text: str) -> int:
+    return len(text) // 4
+
+
+def _trim_messages_to_limit(messages: list, token_limit: int = 8000) -> list:
+    total = sum(_estimate_tokens(m["content"]) for m in messages)
+    if total <= token_limit:
+        return messages
+
+    # Preserve system prompt (index 0) and last user message (index -1)
+    if len(messages) <= 2:
+        return messages
+
+    system_msg = messages[0]
+    user_msg = messages[-1]
+    reserved = _estimate_tokens(system_msg["content"]) + _estimate_tokens(user_msg["content"])
+    budget = token_limit - reserved
+
+    # Truncate the context message (middle messages or the user content if single-message)
+    middle = messages[1:-1]
+    trimmed = []
+    for msg in middle:
+        content = msg["content"]
+        allowed_chars = budget * 4
+        if allowed_chars <= 0:
+            break
+        trimmed.append({**msg, "content": content[:allowed_chars]})
+        budget -= _estimate_tokens(content[:allowed_chars])
+
+    return [system_msg] + trimmed + [user_msg]
+
+
 async def chat(messages: list, model: str = SMART_MODEL, system: str = SYSTEM_PROMPT) -> str:
     full_messages = [{"role": "system", "content": system}] + messages
+    full_messages = _trim_messages_to_limit(full_messages)
     response = await client.chat.completions.create(
         model=model,
         messages=full_messages,
