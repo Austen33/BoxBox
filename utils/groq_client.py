@@ -1,13 +1,7 @@
 import os
 from groq import AsyncGroq
 
-_client = None
-
-def get_groq_client() -> AsyncGroq:
-    global _client
-    if _client is None:
-        _client = AsyncGroq(api_key=os.environ["GROQ_API_KEY"])
-    return _client
+client = AsyncGroq(api_key=os.environ["GROQ_API_KEY"])
 
 FAST_MODEL = "llama-3.1-8b-instant"
 SMART_MODEL = "llama-3.3-70b-versatile"
@@ -27,7 +21,6 @@ Rules for every response:
 
 
 async def chat(messages: list, model: str = SMART_MODEL, system: str = SYSTEM_PROMPT) -> str:
-    client = get_groq_client()
     full_messages = [{"role": "system", "content": system}] + messages
     response = await client.chat.completions.create(
         model=model,
@@ -39,7 +32,6 @@ async def chat(messages: list, model: str = SMART_MODEL, system: str = SYSTEM_PR
 
 
 async def transcribe_audio(audio_bytes: bytes, filename: str = "voice.ogg") -> str:
-    client = get_groq_client()
     transcription = await client.audio.transcriptions.create(
         file=(filename, audio_bytes),
         model=WHISPER_MODEL,
