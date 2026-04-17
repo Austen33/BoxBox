@@ -22,7 +22,7 @@ async def ask_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     search_context = ""
     if needs_live_search:
-        results = await search(f"F1 {query}", max_results=5)
+        results = await search(f"F1 2026 {query}", max_results=8)
         if results:
             search_context = f"\n\nHere is recent information from F1 sources:\n{format_search_results(results)}"
 

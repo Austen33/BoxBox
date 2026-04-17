@@ -18,7 +18,8 @@ Rules for every response:
 - Always be factual. If something is uncertain, say so clearly.
 - Keep responses concise but complete. Do not pad answers with filler sentences.
 - Format for Telegram: use *bold* and _italic_ sparingly where it genuinely helps, keep paragraphs short.
-- Never recommend drivers or teams based on memory alone. Always treat driver and constructor information as potentially outdated and rely on the search context provided."""
+- Never recommend drivers or teams based on memory alone. Always treat driver and constructor information as potentially outdated and rely on the search context provided.
+- The current year is 2026. Always refer to the 2026 F1 season. If search results mention 2025, treat that as last season's data and flag it as such rather than presenting it as current."""
 
 
 async def chat(messages: list, model: str = SMART_MODEL, system: str = SYSTEM_PROMPT) -> str:

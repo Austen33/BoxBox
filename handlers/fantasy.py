@@ -21,8 +21,8 @@ async def fantasy_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             qual_summary += f"P{r['position']}: {r['driver']} ({r['team']})\n"
 
     grid_results, fantasy_results = await asyncio.gather(
-        search("2026 F1 driver lineup all teams current season grid", max_results=5),
-        search(f"F1 Fantasy 2026 best value drivers picks {race_name}", max_results=5),
+        search("2026 F1 driver lineup all teams current season grid", max_results=8),
+        search(f"F1 Fantasy 2026 best value drivers picks {race_name}", max_results=8),
     )
     search_context = ""
     if grid_results:
