@@ -5,7 +5,9 @@ from datetime import datetime
 import os
 import tempfile
 
-fastf1.Cache.enable_cache(os.path.join(tempfile.gettempdir(), "fastf1_cache"))
+cache_dir = os.path.join(tempfile.gettempdir(), "fastf1_cache")
+os.makedirs(cache_dir, exist_ok=True)
+fastf1.Cache.enable_cache(cache_dir)
 
 IRISH_TZ = pytz.timezone("Europe/Dublin")
 UTC_TZ = pytz.utc
