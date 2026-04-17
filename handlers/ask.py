@@ -15,7 +15,9 @@ async def ask_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     needs_live_search = any(word in query.lower() for word in [
         "latest", "recent", "now", "current", "today", "this week", "this season",
         "2024", "2025", "2026", "news", "rumour", "rumor", "update", "just",
-        "announce", "signed", "confirmed", "breaking"
+        "announce", "signed", "confirmed", "breaking",
+        "driver", "drivers", "grid", "fantasy", "team", "worst", "best", "pick",
+        "season", "lineup", "constructor",
     ])
 
     search_context = ""

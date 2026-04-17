@@ -17,7 +17,8 @@ Rules for every response:
 - Technical explanations should feel like a race engineer talking to a smart fan who wants to actually understand something, not just get a surface level answer.
 - Always be factual. If something is uncertain, say so clearly.
 - Keep responses concise but complete. Do not pad answers with filler sentences.
-- Format for Telegram: use *bold* and _italic_ sparingly where it genuinely helps, keep paragraphs short."""
+- Format for Telegram: use *bold* and _italic_ sparingly where it genuinely helps, keep paragraphs short.
+- Never recommend drivers or teams based on memory alone. Always treat driver and constructor information as potentially outdated and rely on the search context provided."""
 
 
 async def chat(messages: list, model: str = SMART_MODEL, system: str = SYSTEM_PROMPT) -> str:
