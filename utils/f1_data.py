@@ -1,6 +1,7 @@
 import fastf1
 import pandas as pd
 import pytz
+import aiohttp
 from datetime import datetime
 import os
 import tempfile
@@ -283,6 +284,79 @@ def get_lap_data_for_strategy(year: int = None, round_number: int = None) -> dic
             "round": round_number,
             "total_laps": total_laps,
             "strategies": driver_strategies,
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
+JOLPI_BASE = "https://api.jolpi.ca/ergast/f1"
+
+
+async def get_driver_standings(year: int = None) -> dict | None:
+    if year is None:
+        year = get_current_season()
+    url = f"{JOLPI_BASE}/{year}/driverStandings.json?limit=10"
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                if resp.status != 200:
+                    return {"error": f"API returned {resp.status}"}
+                data = await resp.json()
+
+        lists = data["MRData"]["StandingsTable"]["StandingsLists"]
+        if not lists:
+            return {"error": "No standings data available yet"}
+
+        standings_list = lists[0]
+        drivers = []
+        for entry in standings_list["DriverStandings"]:
+            drivers.append({
+                "position": int(entry["position"]),
+                "driver": f"{entry['Driver']['givenName']} {entry['Driver']['familyName']}",
+                "code": entry["Driver"].get("code", ""),
+                "team": entry["Constructors"][0]["name"] if entry["Constructors"] else "Unknown",
+                "points": float(entry["points"]),
+                "wins": int(entry["wins"]),
+            })
+
+        return {
+            "year": year,
+            "round": int(standings_list["round"]),
+            "drivers": drivers,
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
+async def get_constructor_standings(year: int = None) -> dict | None:
+    if year is None:
+        year = get_current_season()
+    url = f"{JOLPI_BASE}/{year}/constructorStandings.json?limit=10"
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                if resp.status != 200:
+                    return {"error": f"API returned {resp.status}"}
+                data = await resp.json()
+
+        lists = data["MRData"]["StandingsTable"]["StandingsLists"]
+        if not lists:
+            return {"error": "No standings data available yet"}
+
+        standings_list = lists[0]
+        constructors = []
+        for entry in standings_list["ConstructorStandings"]:
+            constructors.append({
+                "position": int(entry["position"]),
+                "team": entry["Constructor"]["name"],
+                "points": float(entry["points"]),
+                "wins": int(entry["wins"]),
+            })
+
+        return {
+            "year": year,
+            "round": int(standings_list["round"]),
+            "constructors": constructors,
         }
     except Exception as e:
         return {"error": str(e)}
