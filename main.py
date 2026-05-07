@@ -17,6 +17,10 @@ from handlers.strategy import strategy_handler
 from handlers.fantasy import fantasy_handler
 from handlers.rumour import rumour_handler
 from handlers.voice import voice_handler
+from handlers.standings import standings_handler
+from handlers.lap import lap_handler
+from handlers.h2h import h2h_handler
+from handlers.notify import notify_handler, setup_scheduler
 
 load_dotenv()
 
@@ -34,9 +38,13 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         "/race — next race weekend countdown with all session times in Irish time\n"
         "/predict — pre-race winner prediction based on qualifying, form, and circuit data\n"
         "/strategy — post-race tyre strategy breakdown with optimal vs actual analysis\n"
-        "/fantasy — F1 Fantasy picks for the upcoming round (top pick, value pick, constructor)\n"
+        "/fantasy — F1 Fantasy picks for the upcoming round\n"
+        "/standings — current drivers and constructors championship standings\n"
         "/rumour \\[topic\\] — latest paddock rumours, flagged confirmed vs speculation\n"
-        "/ask \\[question\\] — any F1 question, live search for recent stuff, knowledge base for history and tech\n\n"
+        "/ask \\[question\\] — any F1 question, live search for recent stuff\n"
+        "/lap \\[driver\\] \\[session\\] — fastest lap summary (e.g. /lap VER Q)\n"
+        "/h2h \\[driver1\\] \\[driver2\\] — head-to-head this season (e.g. /h2h VER NOR)\n"
+        "/notify — toggle 30-min session reminders\n\n"
         "You can also send a *voice note* and I'll transcribe it and answer like an /ask query.\n\n"
         "Lights out and away we go."
     )
@@ -50,10 +58,15 @@ async def post_init(application: Application) -> None:
         BotCommand("predict", "Pre-race winner prediction"),
         BotCommand("strategy", "Post-race tyre strategy breakdown"),
         BotCommand("fantasy", "F1 Fantasy picks for the next round"),
+        BotCommand("standings", "Current championship standings"),
         BotCommand("rumour", "Latest rumours about a driver or team"),
         BotCommand("ask", "Ask any F1 question"),
+        BotCommand("lap", "Fastest lap summary for a driver and session"),
+        BotCommand("h2h", "Head-to-head stats for two drivers"),
+        BotCommand("notify", "Toggle session reminders"),
     ]
     await application.bot.set_my_commands(commands)
+    setup_scheduler(application)
 
 
 def main() -> None:
@@ -69,12 +82,17 @@ def main() -> None:
     )
 
     application.add_handler(CommandHandler("start", start_handler))
+    application.add_handler(CommandHandler("help", start_handler))
     application.add_handler(CommandHandler("race", race_handler))
     application.add_handler(CommandHandler("predict", predict_handler))
     application.add_handler(CommandHandler("strategy", strategy_handler))
     application.add_handler(CommandHandler("fantasy", fantasy_handler))
     application.add_handler(CommandHandler("rumour", rumour_handler))
     application.add_handler(CommandHandler("ask", ask_handler))
+    application.add_handler(CommandHandler("standings", standings_handler))
+    application.add_handler(CommandHandler("lap", lap_handler))
+    application.add_handler(CommandHandler("h2h", h2h_handler))
+    application.add_handler(CommandHandler("notify", notify_handler))
     application.add_handler(
         MessageHandler(filters.VOICE, voice_handler)
     )
