@@ -2,9 +2,15 @@ from telegram import Update
 from telegram.ext import ContextTypes
 from utils.groq_client import chat, SMART_MODEL
 from utils.tavily_client import search, format_search_results
+from utils.rate_limit import is_rate_limited
 
 
 async def rumour_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = update.effective_user.id
+    if is_rate_limited(user_id):
+        await update.message.reply_text("Slow down — one question at a time.")
+        return
+
     topic = " ".join(context.args) if context.args else ""
     if not topic:
         await update.message.reply_text(

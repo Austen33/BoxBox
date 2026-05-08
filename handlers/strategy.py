@@ -3,9 +3,15 @@ from telegram.ext import ContextTypes
 from utils.f1_data import get_lap_data_for_strategy
 from utils.groq_client import chat, SMART_MODEL
 from utils.tavily_client import search, format_search_results
+from utils.rate_limit import is_rate_limited
 
 
 async def strategy_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = update.effective_user.id
+    if is_rate_limited(user_id):
+        await update.message.reply_text("Slow down — one question at a time.")
+        return
+
     await update.message.reply_chat_action("typing")
 
     strategy_data = get_lap_data_for_strategy()

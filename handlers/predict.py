@@ -1,11 +1,17 @@
 from telegram import Update
 from telegram.ext import ContextTypes
-from utils.f1_data import get_qualifying_results, get_next_race_info
+from utils.f1_data import get_qualifying_results, get_next_race_info, get_current_season
 from utils.groq_client import chat, SMART_MODEL
 from utils.tavily_client import search, format_search_results
+from utils.rate_limit import is_rate_limited
 
 
 async def predict_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = update.effective_user.id
+    if is_rate_limited(user_id):
+        await update.message.reply_text("Slow down — one question at a time.")
+        return
+
     await update.message.reply_chat_action("typing")
 
     qual_data = get_qualifying_results()
@@ -26,7 +32,8 @@ async def predict_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     else:
         qual_summary = "Qualifying results not yet available."
 
-    search_results = await search(f"F1 {race_name} race prediction form 2025", max_results=5)
+    year = get_current_season()
+    search_results = await search(f"F1 {race_name} race prediction form {year}", max_results=5)
     search_context = format_search_results(search_results) if search_results else ""
 
     prompt = f"""You are giving a pre-race winner prediction for {race_name} at {circuit_name}.

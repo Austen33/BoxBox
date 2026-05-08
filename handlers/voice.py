@@ -3,9 +3,15 @@ from telegram import Update
 from telegram.ext import ContextTypes
 from utils.groq_client import transcribe_audio, chat, SMART_MODEL
 from utils.tavily_client import search, format_search_results
+from utils.rate_limit import is_rate_limited
 
 
 async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = update.effective_user.id
+    if is_rate_limited(user_id):
+        await update.message.reply_text("Slow down — one question at a time.")
+        return
+
     voice = update.message.voice
     if not voice:
         return

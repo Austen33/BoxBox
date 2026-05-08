@@ -4,6 +4,7 @@ from telegram.ext import ContextTypes
 from utils.groq_client import chat, SMART_MODEL
 from utils.tavily_client import search, format_search_results
 from utils.f1_data import get_last_race_results, get_driver_standings, get_constructor_standings
+from utils.rate_limit import is_rate_limited
 
 STANDINGS_KEYWORDS = [
     "standings", "championship", "points", "who is leading", "who's leading",
@@ -20,6 +21,11 @@ LIVE_KEYWORDS = [
 
 
 async def ask_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = update.effective_user.id
+    if is_rate_limited(user_id):
+        await update.message.reply_text("Slow down — one question at a time.")
+        return
+
     query = " ".join(context.args) if context.args else ""
     if not query:
         await update.message.reply_text("What do you want to know? Try /ask who has the most wins at Monaco")
@@ -48,13 +54,13 @@ async def ask_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             constructor_data = None
 
         if driver_data and "error" not in driver_data:
-            f1_context += f"2026 Driver Championship Standings (after round {driver_data['round']}):\n"
+            f1_context += f"{driver_data['year']} Driver Championship Standings (after round {driver_data['round']}):\n"
             for d in driver_data["drivers"]:
                 f1_context += f"P{d['position']}: {d['driver']} ({d['team']}) - {d['points']} pts, {d['wins']} wins\n"
             f1_context += "\n"
 
         if constructor_data and "error" not in constructor_data:
-            f1_context += f"2026 Constructor Standings (after round {constructor_data['round']}):\n"
+            f1_context += f"{constructor_data['year']} Constructor Standings (after round {constructor_data['round']}):\n"
             for c in constructor_data["constructors"]:
                 f1_context += f"P{c['position']}: {c['team']} - {c['points']} pts\n"
             f1_context += "\n"

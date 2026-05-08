@@ -202,7 +202,7 @@ async def _fetch_driver_career_stats(driver_id: str) -> dict | None:
                             stats["poles"] += 1
                         if result.get("FastestLap", {}).get("rank") == "1":
                             stats["fastest_laps"] += 1
-                        if "Retired" in status or "Accident" in status or status.startswith("DNF"):
+                        if status != "Finished" and not status.startswith("+"):
                             stats["dnfs"] += 1
                         if pos < stats["best_finish"]:
                             stats["best_finish"] = pos
@@ -218,7 +218,7 @@ async def _fetch_driver_career_stats(driver_id: str) -> dict | None:
 
             stats["seasons"] = sorted(stats["seasons"], reverse=True)
             stats["teams"] = sorted(stats["teams"])
-            stats["best_finish"] = stats["best_finish"] if stats["best_finish"] <= 20 else "N/A"
+            stats["best_finish"] = stats["best_finish"] if stats["best_finish"] < 20 else "N/A"
 
             return stats
     except Exception:
@@ -297,6 +297,7 @@ Include wins, podiums, notable moments, and general form."""
         pos = r['position']
         if pos == "1":
             wins += 1
+            podiums += 1
             pos = "🥇 1"
         elif pos == "2":
             podiums += 1

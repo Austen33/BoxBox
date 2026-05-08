@@ -21,7 +21,6 @@ from handlers.standings import standings_handler
 from handlers.lap import lap_handler
 from handlers.h2h import h2h_handler
 from handlers.notify import notify_handler, setup_scheduler
-from handlers.radio import radio_handler
 from handlers.telemetry import telemetry_handler
 from handlers.history import history_handler, career_handler
 
@@ -47,7 +46,6 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         "/ask \\[question\\] — any F1 question, live search for recent stuff\n"
         "/lap \\[driver\\] \\[session\\] — fastest lap summary (e.g. /lap VER Q)\n"
         "/h2h \\[driver1\\] \\[driver2\\] — head-to-head this season (e.g. /h2h VER NOR)\n"
-        "/radio \\[driver\\] — team radio transcripts from last session\n"
         "/telemetry \\[driver1\\] \\[driver2\\] — compare fastest lap telemetry\n"
         "/history \\[driver\\] \\[circuit\\] — driver's past results at a track\n"
         "/career \\[driver\\] — complete career statistics\n"
@@ -71,7 +69,6 @@ async def post_init(application: Application) -> None:
         BotCommand("ask", "Ask any F1 question"),
         BotCommand("lap", "Fastest lap summary for a driver and session"),
         BotCommand("h2h", "Head-to-head stats for two drivers"),
-        BotCommand("radio", "Team radio transcripts from last session"),
         BotCommand("telemetry", "Compare fastest lap telemetry"),
         BotCommand("history", "Driver's past results at a circuit"),
         BotCommand("career", "Complete driver career statistics"),
@@ -104,7 +101,6 @@ def main() -> None:
     application.add_handler(CommandHandler("standings", standings_handler))
     application.add_handler(CommandHandler("lap", lap_handler))
     application.add_handler(CommandHandler("h2h", h2h_handler))
-    application.add_handler(CommandHandler("radio", radio_handler))
     application.add_handler(CommandHandler("telemetry", telemetry_handler))
     application.add_handler(CommandHandler("history", history_handler))
     application.add_handler(CommandHandler("career", career_handler))
