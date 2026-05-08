@@ -21,6 +21,9 @@ from handlers.standings import standings_handler
 from handlers.lap import lap_handler
 from handlers.h2h import h2h_handler
 from handlers.notify import notify_handler, setup_scheduler
+from handlers.radio import radio_handler
+from handlers.telemetry import telemetry_handler
+from handlers.history import history_handler, career_handler
 
 load_dotenv()
 
@@ -44,7 +47,12 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         "/ask \\[question\\] — any F1 question, live search for recent stuff\n"
         "/lap \\[driver\\] \\[session\\] — fastest lap summary (e.g. /lap VER Q)\n"
         "/h2h \\[driver1\\] \\[driver2\\] — head-to-head this season (e.g. /h2h VER NOR)\n"
-        "/notify — toggle 30-min session reminders\n\n"
+        "/radio \\[driver\\] — team radio transcripts from last session\n"
+        "/telemetry \\[driver1\\] \\[driver2\\] — compare fastest lap telemetry\n"
+        "/history \\[driver\\] \\[circuit\\] — driver's past results at a track\n"
+        "/career \\[driver\\] — complete career statistics\n"
+        "/notify — toggle session reminders and breaking news alerts\n"
+        "\n"
         "You can also send a *voice note* and I'll transcribe it and answer like an /ask query.\n\n"
         "Lights out and away we go."
     )
@@ -63,7 +71,11 @@ async def post_init(application: Application) -> None:
         BotCommand("ask", "Ask any F1 question"),
         BotCommand("lap", "Fastest lap summary for a driver and session"),
         BotCommand("h2h", "Head-to-head stats for two drivers"),
-        BotCommand("notify", "Toggle session reminders"),
+        BotCommand("radio", "Team radio transcripts from last session"),
+        BotCommand("telemetry", "Compare fastest lap telemetry"),
+        BotCommand("history", "Driver's past results at a circuit"),
+        BotCommand("career", "Complete driver career statistics"),
+        BotCommand("notify", "Toggle session reminders and breaking news"),
     ]
     await application.bot.set_my_commands(commands)
     setup_scheduler(application)
@@ -92,6 +104,10 @@ def main() -> None:
     application.add_handler(CommandHandler("standings", standings_handler))
     application.add_handler(CommandHandler("lap", lap_handler))
     application.add_handler(CommandHandler("h2h", h2h_handler))
+    application.add_handler(CommandHandler("radio", radio_handler))
+    application.add_handler(CommandHandler("telemetry", telemetry_handler))
+    application.add_handler(CommandHandler("history", history_handler))
+    application.add_handler(CommandHandler("career", career_handler))
     application.add_handler(CommandHandler("notify", notify_handler))
     application.add_handler(
         MessageHandler(filters.VOICE, voice_handler)

@@ -1,18 +1,43 @@
 import datetime
 import logging
+import hashlib
 import pandas as pd
 import pytz
 from telegram import Update
 from telegram.ext import Application, ContextTypes
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.date import DateTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 from utils.f1_data import get_event_schedule, IRISH_TZ, UTC_TZ
 from utils.rate_limit import is_rate_limited
+from utils.tavily_client import search
+from utils.groq_client import chat, FAST_MODEL
 
 logger = logging.getLogger(__name__)
 
 _subscribers: set[int] = set()
 _scheduler: AsyncIOScheduler | None = None
+_seen_news_hashes: set[str] = set()
+
+# Keywords that indicate breaking/important news
+BREAKING_KEYWORDS = [
+    "announced", "confirmed", "signs", "signed", "joins", "leaves", "sacked",
+    "penalty", "penalised", "disqualified", "banned", "fined",
+    "injured", "crash", "retire", "retirement", "replacing", "replaced",
+    "new team", "new driver", "reserve driver", "debut",
+    "rule change", "regulation", "technical directive",
+    "championship", "title", "clinch",
+]
+
+NEWS_SOURCES = [
+    "formula1.com",
+    "autosport.com",
+    "motorsport.com",
+    "the-race.com",
+    "gpfans.com",
+    "planetf1.com",
+    "f1i.com",
+]
 
 
 def setup_scheduler(application: Application) -> None:
@@ -22,8 +47,16 @@ def setup_scheduler(application: Application) -> None:
         _schedule_all_reminders(application)
     except Exception as e:
         logger.error(f"Failed to schedule session reminders: {e}")
+    # Schedule news check every 30 minutes
+    _scheduler.add_job(
+        _check_breaking_news,
+        trigger=IntervalTrigger(minutes=30),
+        args=[application],
+        id="news_check",
+        replace_existing=True,
+    )
     _scheduler.start()
-    logger.info("Session reminder scheduler started.")
+    logger.info("Session reminder scheduler started (news checks every 30min).")
 
 
 def _schedule_all_reminders(application: Application) -> None:
@@ -76,6 +109,91 @@ async def _send_reminder(application: Application, message: str) -> None:
             logger.warning(f"Failed to send reminder to {chat_id}: {e}")
 
 
+def _hash_news(title: str, url: str) -> str:
+    """Create a unique hash for a news item."""
+    return hashlib.md5(f"{title}:{url}".encode()).hexdigest()
+
+
+def _is_breaking_news(title: str, content: str) -> bool:
+    """Check if news item contains breaking keywords."""
+    combined = f"{title} {content}".lower()
+    return any(kw in combined for kw in BREAKING_KEYWORDS)
+
+
+async def _check_breaking_news(application: Application) -> None:
+    """Periodically check for breaking F1 news and push to subscribers."""
+    if not _subscribers:
+        return
+
+    try:
+        # Search for latest F1 news
+        results = await search("F1 2026 latest news breaking announced", max_results=10)
+
+        if not results:
+            return
+
+        breaking_items = []
+        for item in results:
+            title = item.get("title", "")
+            url = item.get("url", "")
+            content = item.get("content", "")
+
+            # Check if this is breaking news
+            if not _is_breaking_news(title, content):
+                continue
+
+            # Check if we've already seen this news
+            news_hash = _hash_news(title, url)
+            if news_hash in _seen_news_hashes:
+                continue
+
+            # Mark as seen
+            _seen_news_hashes.add(news_hash)
+
+            # Keep hash set from growing too large
+            if len(_seen_news_hashes) > 500:
+                # Remove oldest half (we can't know actual age, so just trim)
+                _seen_news_hashes.difference_update(set(list(_seen_news_hashes)[:250]))
+
+            breaking_items.append({
+                "title": title,
+                "url": url,
+                "content": content[:300],  # Truncate for summary
+            })
+
+        if not breaking_items:
+            return
+
+        # Summarize breaking news with LLM
+        news_text = "\n\n".join([
+            f"**{item['title']}**\n{item['content']}\nSource: {item['url']}"
+            for item in breaking_items[:3]  # Limit to top 3
+        ])
+
+        prompt = f"""Summarize these breaking F1 news items in 2-3 sentences max.
+Be concise and factual. Focus on the key announcement or development.
+
+News:
+{news_text}"""
+
+        summary = await chat(messages=[{"role": "user", "content": prompt}], model=FAST_MODEL)
+
+        # Send to all subscribers
+        message = f"🚨 *Breaking F1 News*\n\n{summary}"
+        for chat_id in list(_subscribers):
+            try:
+                await application.bot.send_message(
+                    chat_id=chat_id, text=message, parse_mode="Markdown"
+                )
+            except Exception as e:
+                logger.warning(f"Failed to send news to {chat_id}: {e}")
+
+        logger.info(f"Pushed {len(breaking_items)} breaking news items to {len(_subscribers)} subscribers")
+
+    except Exception as e:
+        logger.error(f"Error checking breaking news: {e}")
+
+
 async def notify_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     if is_rate_limited(user_id):
@@ -86,12 +204,14 @@ async def notify_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if chat_id in _subscribers:
         _subscribers.discard(chat_id)
         await update.message.reply_text(
-            "Reminders off. You won't get session alerts anymore.\n"
+            "Reminders off. You won't get session alerts or breaking news anymore.\n"
             "Use /notify again to turn them back on."
         )
     else:
         _subscribers.add(chat_id)
         await update.message.reply_text(
-            "Reminders on. You'll get a message 30 minutes before each session.\n"
+            "Reminders on. You'll get:\n"
+            "• 30-min alerts before each session\n"
+            "• Breaking F1 news as it happens\n\n"
             "Use /notify again to turn them off."
         )
