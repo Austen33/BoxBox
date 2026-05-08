@@ -1,9 +1,7 @@
-import asyncio
 from telegram import Update
 from telegram.ext import ContextTypes
 import aiohttp
 
-from utils.f1_data import get_current_season
 from utils.groq_client import chat, SMART_MODEL
 from utils.tavily_client import search, format_search_results
 from utils.rate_limit import is_rate_limited
@@ -16,18 +14,24 @@ async def _fetch_driver_results_at_circuit(driver_id: str, circuit_id: str, limi
     results = []
     try:
         async with aiohttp.ClientSession() as session:
-            # Get all races at this circuit
-            url = f"{JOLPI_BASE}/circuits/{circuit_id}/results.json?limit=100"
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
-                if resp.status != 200:
-                    return []
-                data = await resp.json()
+            offset = 0
+            page_size = 100
+            while True:
+                url = f"{JOLPI_BASE}/drivers/{driver_id}/results.json?limit={page_size}&offset={offset}"
+                async with session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                    if resp.status != 200:
+                        break
+                    data = await resp.json()
 
-            races = data["MRData"]["RaceTable"]["Races"]
-            for race in races:
-                for result in race.get("Results", []):
-                    driver = result.get("Driver", {})
-                    if driver.get("driverId", "").lower() == driver_id.lower():
+                races = data["MRData"]["RaceTable"]["Races"]
+                if not races:
+                    break
+
+                for race in races:
+                    circuit = race.get("Circuit", {})
+                    if circuit.get("circuitId", "").lower() != circuit_id.lower():
+                        continue
+                    for result in race.get("Results", []):
                         results.append({
                             "year": race.get("season", "?"),
                             "race_name": race.get("raceName", "?"),
@@ -37,6 +41,12 @@ async def _fetch_driver_results_at_circuit(driver_id: str, circuit_id: str, limi
                             "points": result.get("points", "0"),
                             "constructor": result.get("Constructor", {}).get("name", "?"),
                         })
+
+                total = int(data["MRData"]["total"])
+                offset += page_size
+                if offset >= total:
+                    break
+
         return results[:limit]
     except Exception:
         return []
@@ -46,7 +56,7 @@ async def _fetch_driver_id_by_name(name: str) -> str | None:
     """Resolve driver name to driverId for Ergast API."""
     try:
         async with aiohttp.ClientSession() as session:
-            url = f"{JOLPI_BASE}/drivers.json?limit=50"
+            url = f"{JOLPI_BASE}/current/drivers.json"
             async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
                 if resp.status != 200:
                     return None
@@ -66,7 +76,7 @@ async def _fetch_driver_id_by_name(name: str) -> str | None:
                 if name_lower in f"{d.get('givenName', '')} {d.get('familyName', '')}".lower():
                     return d.get("driverId")
 
-            # If not found in current drivers, try searching
+            # If not found in current drivers, try direct lookup
             url = f"{JOLPI_BASE}/drivers/{name_lower}.json"
             async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
                 if resp.status == 200:
@@ -150,16 +160,8 @@ async def _fetch_driver_career_stats(driver_id: str) -> dict | None:
     """Fetch career statistics for a driver."""
     try:
         async with aiohttp.ClientSession() as session:
-            url = f"{JOLPI_BASE}/drivers/{driver_id}/results.json?limit=500"
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
-                if resp.status != 200:
-                    return None
-                data = await resp.json()
-
-            races = data["MRData"]["RaceTable"]["Races"]
-
             stats = {
-                "total_races": len(races),
+                "total_races": 0,
                 "wins": 0,
                 "podiums": 0,
                 "poles": 0,
@@ -170,29 +172,49 @@ async def _fetch_driver_career_stats(driver_id: str) -> dict | None:
                 "teams": set(),
             }
 
-            for race in races:
-                stats["seasons"].add(race.get("season", "?"))
-                for result in race.get("Results", []):
-                    pos = int(result.get("position", 20))
-                    grid = int(result.get("grid", 0))
-                    status = result.get("status", "")
+            offset = 0
+            page_size = 100
+            while True:
+                url = f"{JOLPI_BASE}/drivers/{driver_id}/results.json?limit={page_size}&offset={offset}"
+                async with session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                    if resp.status != 200:
+                        break
+                    data = await resp.json()
 
-                    if pos == 1:
-                        stats["wins"] += 1
-                    if pos <= 3:
-                        stats["podiums"] += 1
-                    if grid == 1:
-                        stats["poles"] += 1
-                    if result.get("FastestLap", {}).get("rank") == "1":
-                        stats["fastest_laps"] += 1
-                    if "Retired" in status or "Accident" in status or status.startswith("DNF"):
-                        stats["dnfs"] += 1
-                    if pos < stats["best_finish"]:
-                        stats["best_finish"] = pos
+                races = data["MRData"]["RaceTable"]["Races"]
+                if not races:
+                    break
 
-                    constructor = result.get("Constructor", {}).get("name")
-                    if constructor:
-                        stats["teams"].add(constructor)
+                stats["total_races"] += len(races)
+
+                for race in races:
+                    stats["seasons"].add(race.get("season", "?"))
+                    for result in race.get("Results", []):
+                        pos = int(result.get("position", 20))
+                        grid = int(result.get("grid", 0))
+                        status = result.get("status", "")
+
+                        if pos == 1:
+                            stats["wins"] += 1
+                        if pos <= 3:
+                            stats["podiums"] += 1
+                        if grid == 1:
+                            stats["poles"] += 1
+                        if result.get("FastestLap", {}).get("rank") == "1":
+                            stats["fastest_laps"] += 1
+                        if "Retired" in status or "Accident" in status or status.startswith("DNF"):
+                            stats["dnfs"] += 1
+                        if pos < stats["best_finish"]:
+                            stats["best_finish"] = pos
+
+                        constructor = result.get("Constructor", {}).get("name")
+                        if constructor:
+                            stats["teams"].add(constructor)
+
+                total = int(data["MRData"]["total"])
+                offset += page_size
+                if offset >= total:
+                    break
 
             stats["seasons"] = sorted(stats["seasons"], reverse=True)
             stats["teams"] = sorted(stats["teams"])

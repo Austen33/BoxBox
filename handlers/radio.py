@@ -24,6 +24,7 @@ def _get_last_completed_session(year: int) -> tuple[int, str, str] | None:
         ("Session1Date", "Session1", "FP1"),
     ]
 
+    last_match = None
     for _, event in schedule.iterrows():
         for date_key, name_key, sess_type in session_map:
             d = event.get(date_key)
@@ -32,9 +33,10 @@ def _get_last_completed_session(year: int) -> tuple[int, str, str] | None:
             if hasattr(d, "tzinfo") and d.tzinfo is None:
                 d = UTC_TZ.localize(d)
             if d < now_utc:
-                return (int(event["RoundNumber"]), event.get("EventName", "Unknown"), sess_type)
+                last_match = (int(event["RoundNumber"]), event.get("EventName", "Unknown"), sess_type)
+                break
 
-    return None
+    return last_match
 
 
 def _fetch_team_radio(year: int, round_num: int, session_type: str, driver: str) -> list[dict]:

@@ -16,6 +16,7 @@ def _get_last_race_session(year: int) -> tuple[int, str] | None:
     schedule = get_event_schedule(year)
     now_utc = datetime.now(UTC_TZ)
 
+    last_match = None
     for _, event in schedule.iterrows():
         d = event.get("Session5Date")
         if d is None or pd.isna(d):
@@ -23,9 +24,9 @@ def _get_last_race_session(year: int) -> tuple[int, str] | None:
         if hasattr(d, "tzinfo") and d.tzinfo is None:
             d = UTC_TZ.localize(d)
         if d < now_utc:
-            return (int(event["RoundNumber"]), event.get("EventName", "Unknown"))
+            last_match = (int(event["RoundNumber"]), event.get("EventName", "Unknown"))
 
-    return None
+    return last_match
 
 
 def _fetch_telemetry_comparison(year: int, round_num: int, driver1: str, driver2: str, corner: int | None = None) -> dict:
