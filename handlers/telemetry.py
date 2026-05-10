@@ -11,6 +11,8 @@ import numpy as np
 from utils.f1_data import get_current_season, get_event_schedule, UTC_TZ, cache_dir
 from utils.groq_client import chat, SMART_MODEL
 from utils.rate_limit import is_rate_limited
+from fastf1._api import car_data as api_car_data
+from fastf1.core import Telemetry
 
 logger = logging.getLogger(__name__)
 
@@ -33,17 +35,57 @@ def _get_last_race_session(year: int) -> tuple[int, str] | None:
     return last_match
 
 
+def _load_car_data_manual(session) -> dict:
+    """Manually fetch and process car telemetry data, bypassing session.load(telemetry=True)."""
+    try:
+        raw = api_car_data(session.api_path)
+    except Exception as e:
+        logger.warning(f"api_car_data failed: {e}")
+        return {}
+
+    if not raw:
+        return {}
+
+    session._calculate_t0_date(raw, {})
+
+    car_data = {}
+    for drv in session.drivers:
+        if drv not in raw:
+            continue
+        try:
+            drv_car = Telemetry(
+                raw[drv].drop(labels='Time', axis=1),
+                session=session,
+                driver=drv,
+                drop_unknown_channels=True,
+                _cast_default_cols=True
+            )
+        except Exception:
+            continue
+
+        drv_car['Date'] = drv_car['Date'].dt.round('ms')
+        drv_car['Time'] = drv_car['Date'] - session.t0_date
+        drv_car['SessionTime'] = drv_car['Time']
+
+        car_data[drv] = drv_car
+
+    return car_data
+
+
+def _get_car_data_for_lap(session, lap, car_data_dict: dict):
+    """Get car data for a specific lap from a pre-loaded car_data dict."""
+    drv_num = lap['DriverNumber']
+    if drv_num not in car_data_dict:
+        raise ValueError(f"No car data for driver {drv_num}")
+    return car_data_dict[drv_num].slice_by_lap(lap).reset_index(drop=True)
+
+
 def _fetch_telemetry_comparison(year: int, round_num: int, driver1: str, driver2: str, corner: int | None = None) -> dict:
     """Fetch and compare telemetry between two drivers."""
     try:
         session = fastf1.get_session(year, round_num, "R")
-        try:
-            session.load(laps=True, telemetry=True, weather=False, messages=False)
-        except Exception as load_err:
-            logger.warning(f"session.load failed: {load_err}, clearing cache and retrying...")
-            fastf1.Cache.clear_cache(cache_dir)
-            session = fastf1.get_session(year, round_num, "R")
-            session.load(laps=True, telemetry=True, weather=False, messages=False)
+        session.load(laps=True, telemetry=False, weather=False, messages=False)
+        session._load_telemetry()
 
         results = {}
 
