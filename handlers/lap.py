@@ -39,6 +39,11 @@ def _fetch_fastest_lap(year: int, round_num: int, session_type: str, driver: str
         fastest = driver_laps.pick_fastest()
         if fastest is None:
             return None
+        all_laps = session.laps
+        best_s1 = all_laps["Sector1Time"].min()
+        best_s2 = all_laps["Sector2Time"].min()
+        best_s3 = all_laps["Sector3Time"].min()
+
         return {
             "lap_time": str(fastest.get("LapTime", "")),
             "compound": str(fastest.get("Compound", "?")),
@@ -46,6 +51,9 @@ def _fetch_fastest_lap(year: int, round_num: int, session_type: str, driver: str
             "s1": str(fastest.get("Sector1Time", "")),
             "s2": str(fastest.get("Sector2Time", "")),
             "s3": str(fastest.get("Sector3Time", "")),
+            "best_s1": str(best_s1) if pd.notna(best_s1) else "N/A",
+            "best_s2": str(best_s2) if pd.notna(best_s2) else "N/A",
+            "best_s3": str(best_s3) if pd.notna(best_s3) else "N/A",
         }
     except Exception as e:
         return {"error": str(e)}
@@ -100,14 +108,15 @@ async def lap_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     data_text = (
         f"*{driver}* — {session_type} at {event_name} {year}\n"
         f"Fastest: {data['lap_time']} (Lap {data['lap_num']}, {data['compound']})\n"
-        f"S1 {data['s1']} | S2 {data['s2']} | S3 {data['s3']}"
+        f"S1 {data['s1']} | S2 {data['s2']} | S3 {data['s3']}\n"
+        f"Session best — S1 {data['best_s1']} | S2 {data['best_s2']} | S3 {data['best_s3']}"
     )
 
     prompt = f"""{data_text}
 
-Give a brief 2-3 sentence engineer-style read on this lap: which sector looked
-strongest, the tyre choice, and how it stacks up at this circuit. Use only the
-data above. No filler."""
+Give a brief 2-3 sentence engineer-style read on this lap: which sectors were
+personal strengths vs where time was lost to the session best, the tyre choice,
+and how it stacks up. Use only the data above. No filler."""
 
     response = await chat(messages=[{"role": "user", "content": prompt}], model=FAST_MODEL)
     await update.message.reply_text(f"{data_text}\n\n{response}", parse_mode="Markdown")
