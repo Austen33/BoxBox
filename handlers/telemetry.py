@@ -1,4 +1,6 @@
 import asyncio
+import logging
+import traceback
 from datetime import datetime
 from telegram import Update
 from telegram.ext import ContextTypes
@@ -6,9 +8,11 @@ import fastf1
 import pandas as pd
 import numpy as np
 
-from utils.f1_data import get_current_season, get_event_schedule, UTC_TZ
+from utils.f1_data import get_current_season, get_event_schedule, UTC_TZ, cache_dir
 from utils.groq_client import chat, SMART_MODEL
 from utils.rate_limit import is_rate_limited
+
+logger = logging.getLogger(__name__)
 
 
 def _get_last_race_session(year: int) -> tuple[int, str] | None:
@@ -33,7 +37,13 @@ def _fetch_telemetry_comparison(year: int, round_num: int, driver1: str, driver2
     """Fetch and compare telemetry between two drivers."""
     try:
         session = fastf1.get_session(year, round_num, "R")
-        session.load(laps=True, telemetry=True, weather=False, messages=False)
+        try:
+            session.load(laps=True, telemetry=True, weather=False, messages=False)
+        except Exception as load_err:
+            logger.warning(f"session.load failed: {load_err}, clearing cache and retrying...")
+            fastf1.Cache.clear_cache(cache_dir)
+            session = fastf1.get_session(year, round_num, "R")
+            session.load(laps=True, telemetry=True, weather=False, messages=False)
 
         results = {}
 
@@ -46,7 +56,11 @@ def _fetch_telemetry_comparison(year: int, round_num: int, driver1: str, driver2
             if fastest is None:
                 return {"error": f"No fastest lap for {driver}"}
 
-            car_data = fastest.get_car_data()
+            try:
+                car_data = fastest.get_car_data()
+            except Exception as car_err:
+                logger.warning(f"get_car_data failed for {driver}: {car_err}")
+                return {"error": f"Telemetry unavailable for {driver}: {car_err}"}
             if car_data is None or len(car_data) == 0:
                 return {"error": f"No telemetry for {driver}"}
 
@@ -119,6 +133,7 @@ def _fetch_telemetry_comparison(year: int, round_num: int, driver1: str, driver2
         return results
 
     except Exception as e:
+        logger.error(f"_fetch_telemetry_comparison failed: {traceback.format_exc()}")
         return {"error": str(e)}
 
 
