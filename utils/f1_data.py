@@ -399,7 +399,11 @@ def get_race_rewind_data(year: int, round_number: int) -> dict | None:
             valid_laps = laps[laps["LapTime"].notna()]
             if len(valid_laps) > 0:
                 fl = valid_laps.loc[valid_laps["LapTime"].idxmin()]
-                fastest_lap_info = f"Fastest lap: {fl['Driver']} 1:{fl['LapTime'].strftime('%M.%S.%f')[:8]} (Lap {int(fl['LapNumber'])})"
+                lap_time = fl['LapTime']
+                total_secs = lap_time.total_seconds()
+                mins = int(total_secs // 60)
+                secs = total_secs % 60
+                fastest_lap_info = f"Fastest lap: {fl['Driver']} {mins}:{secs:06.3f} (Lap {int(fl['LapNumber'])})"
 
         # Weather
         weather_info = ""
