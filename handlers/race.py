@@ -39,8 +39,8 @@ Session times (Irish time / Europe/Dublin):
 
 Write a short, punchy race weekend preview message for the BoxBox Telegram bot.
 Include the countdown, all session times, and the location.
-Add one or two sentences about what to watch for at this circuit or this weekend,
-drawing on your knowledge of this race venue. Keep it tight, no waffle."""
+Do NOT add any commentary, predictions, or filler about the circuit or what to watch for.
+Just give the race name, countdown, and session times. Nothing else."""
 
     response = await chat(
         messages=[{"role": "user", "content": prompt}],

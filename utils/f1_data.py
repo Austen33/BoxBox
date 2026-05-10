@@ -292,6 +292,140 @@ def get_lap_data_for_strategy(year: int = None, round_number: int = None) -> dic
 JOLPI_BASE = "https://api.jolpi.ca/ergast/f1"
 
 
+async def resolve_round(year: int, circuit_name: str) -> int | None:
+    """Resolve a circuit name to a round number for a given year via Ergast."""
+    try:
+        async with aiohttp.ClientSession() as session:
+            url = f"{JOLPI_BASE}/{year}.json?limit=30"
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                if resp.status != 200:
+                    return None
+                data = await resp.json()
+
+            races = data["MRData"]["RaceTable"]["Races"]
+            name_lower = circuit_name.lower().strip()
+
+            for race in races:
+                circuit = race.get("Circuit", {})
+                circuit_id = circuit.get("circuitId", "").lower()
+                circuit_name_api = circuit.get("circuitName", "").lower()
+                race_name = race.get("raceName", "").lower()
+                locality = circuit.get("Location", {}).get("locality", "").lower()
+                country = circuit.get("Location", {}).get("country", "").lower()
+
+                if (name_lower in circuit_id or circuit_id in name_lower or
+                    name_lower in circuit_name_api or circuit_name_api in name_lower or
+                    name_lower in race_name or race_name in name_lower or
+                    name_lower in locality or name_lower in country):
+                    return int(race["round"])
+
+            return None
+    except Exception:
+        return None
+
+
+def get_race_rewind_data(year: int, round_number: int) -> dict | None:
+    """Load race data for a rewind summary: results, key events, track status."""
+    try:
+        session = fastf1.get_session(year, round_number, "R")
+        session.load(laps=True, telemetry=False, weather=True, messages=True)
+
+        results = session.results
+        if results is None or len(results) == 0:
+            return None
+
+        # Top 10 finishers
+        finishers = []
+        for i, (_, driver) in enumerate(results.iterrows()):
+            if i >= 10:
+                break
+            pos = driver.get("Position", i + 1)
+            if pd.isna(pos):
+                pos = i + 1
+            finishers.append({
+                "position": int(pos),
+                "driver": driver.get("FullName", driver.get("Abbreviation", "Unknown")),
+                "team": driver.get("TeamName", "Unknown"),
+                "abbreviation": driver.get("Abbreviation", ""),
+                "grid": int(driver.get("GridPosition", 0)) if not pd.isna(driver.get("GridPosition")) else 0,
+                "status": str(driver.get("Status", "")),
+                "points": float(driver.get("Points", 0)) if not pd.isna(driver.get("Points")) else 0,
+            })
+
+        # DNFs and notable statuses
+        dnfs = []
+        for _, driver in results.iterrows():
+            status = str(driver.get("Status", ""))
+            if status not in ("Finished", "") and not status.startswith("+"):
+                dnfs.append({
+                    "driver": driver.get("FullName", driver.get("Abbreviation", "Unknown")),
+                    "team": driver.get("TeamName", "Unknown"),
+                    "status": status,
+                    "grid": int(driver.get("GridPosition", 0)) if not pd.isna(driver.get("GridPosition")) else 0,
+                })
+
+        # Track status events (SC, VSC, red flag)
+        track_events = []
+        if hasattr(session, 'track_status') and session.track_status is not None:
+            for _, row in session.track_status.iterrows():
+                status = str(row.get("Status", ""))
+                message = str(row.get("Message", ""))
+                if status != "1":  # 1 = all clear
+                    track_events.append(f"Lap ~{row.get('LapNumber', '?')}: {message}")
+
+        # Race control messages (penalties, investigations)
+        rc_messages = []
+        if hasattr(session, 'race_control_messages') and session.race_control_messages is not None:
+            for _, msg in session.race_control_messages.head(20).iterrows():
+                category = str(msg.get("Category", ""))
+                message = str(msg.get("Message", ""))
+                if category.lower() in ("penalty", "investigation", "flag", "safety car", "virtual safety car"):
+                    rc_messages.append(f"{category}: {message}")
+
+        # Pit stops summary (first driver only as example, top 5)
+        pit_summary = []
+        laps = session.laps
+        if laps is not None and len(laps) > 0:
+            for abbr in [f["abbreviation"] for f in finishers[:5] if f["abbreviation"]]:
+                driver_laps = laps[laps["Driver"] == abbr]
+                pit_laps = driver_laps[driver_laps["PitInTime"].notna()]
+                if len(pit_laps) > 0:
+                    pit_lap_nums = ", ".join(str(int(l)) for l in pit_laps["LapNumber"].tolist())
+                    pit_summary.append(f"{abbr} pitted on laps: {pit_lap_nums}")
+
+        # Fastest lap
+        fastest_lap_info = ""
+        if laps is not None and len(laps) > 0:
+            valid_laps = laps[laps["LapTime"].notna()]
+            if len(valid_laps) > 0:
+                fl = valid_laps.loc[valid_laps["LapTime"].idxmin()]
+                fastest_lap_info = f"Fastest lap: {fl['Driver']} 1:{fl['LapTime'].strftime('%M.%S.%f')[:8]} (Lap {int(fl['LapNumber'])})"
+
+        # Weather
+        weather_info = ""
+        if hasattr(session, 'weather_data') and session.weather_data is not None and len(session.weather_data) > 0:
+            w = session.weather_data.iloc[0]
+            weather_info = f"Weather: {w.get('AirTemp', '?')}°C air, {w.get('TrackTemp', '?')}°C track, {w.get('Rainfall', 'No')} rain"
+
+        event = fastf1.get_event(year, round_number)
+
+        return {
+            "name": event.EventName,
+            "year": year,
+            "round": round_number,
+            "total_laps": int(laps["LapNumber"].max()) if laps is not None and len(laps) > 0 else 0,
+            "finishers": finishers,
+            "dnfs": dnfs,
+            "track_events": track_events,
+            "rc_messages": rc_messages,
+            "pit_summary": pit_summary,
+            "fastest_lap": fastest_lap_info,
+            "weather": weather_info,
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
 async def get_driver_standings(year: int = None) -> dict | None:
     if year is None:
         year = get_current_season()
