@@ -51,18 +51,20 @@ async def rewind_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
         if search_results:
             search_context = format_search_results(search_results)
-            prompt = f"""Summarize the {year} {circuit_input} Grand Prix for a hardcore F1 fan.
+            prompt = f"""The user is asking about the {year} {circuit_input} Grand Prix.
 
-Focus on:
-- What happened at the start and how the race unfolded
-- Key turning points: safety cars, penalties, crashes, strategy calls that changed the result
-- Controversies or close battles
-- The final result and who gained/lost the most
+CRITICAL RULE: Only answer about the {year} race. If the search results are about a different year, do NOT use that data as if it were {year}. If the {year} race did not happen (cancelled, not yet run, doesn't exist), say so in one sentence and stop. Do NOT tell the user about past years instead.
 
 Search results:
 {search_context}
 
-Write it like you're telling a mate who missed the race what happened. No filler, no generic descriptions. Specific moments, specific laps, specific decisions. Keep it under 200 words."""
+If the {year} race happened:
+- Key turning points: safety cars, penalties, crashes, strategy calls
+- Controversies or close battles
+- The final result
+Write it like you're telling a mate who missed it. No filler. Under 200 words.
+
+If the {year} race did NOT happen, just state that fact in one sentence. Nothing else."""
             response = await chat(messages=[{"role": "user", "content": prompt}], model=SMART_MODEL)
             await update.message.reply_text(f"*{circuit_input.title()} GP {year} — Rewind*\n\n{response}", parse_mode="Markdown")
             return
