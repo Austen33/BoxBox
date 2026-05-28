@@ -3,6 +3,7 @@ from telegram.ext import ContextTypes
 from utils.f1_data import get_driver_standings, get_current_season
 from utils.groq_client import chat, FAST_MODEL
 from utils.rate_limit import is_rate_limited
+from utils.telegram_safe import safe_reply
 
 
 def _find_driver(standings: dict, code_or_name: str) -> dict | None:
@@ -74,4 +75,4 @@ Give a tight 2-sentence verdict on who has had the stronger season so far.
 Use only the numbers above. No filler."""
 
     response = await chat(messages=[{"role": "user", "content": prompt}], model=FAST_MODEL)
-    await update.message.reply_text(f"{data_text}\n\n{response}", parse_mode="Markdown")
+    await safe_reply(update.message, f"{data_text}\n\n{response}")

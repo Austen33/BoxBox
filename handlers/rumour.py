@@ -3,6 +3,7 @@ from telegram.ext import ContextTypes
 from utils.groq_client import chat, SMART_MODEL
 from utils.tavily_client import search, format_search_results
 from utils.rate_limit import is_rate_limited
+from utils.telegram_safe import safe_reply
 
 
 async def rumour_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -45,4 +46,4 @@ If the search results don't give you much to work with, be honest about that rat
         model=SMART_MODEL,
     )
 
-    await update.message.reply_text(response, parse_mode="Markdown")
+    await safe_reply(update.message, response)

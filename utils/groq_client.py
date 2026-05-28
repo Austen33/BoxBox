@@ -1,7 +1,21 @@
 import os
 from groq import AsyncGroq
 
-client = AsyncGroq(api_key=os.environ["GROQ_API_KEY"])
+_client: AsyncGroq | None = None
+
+
+def _get_client() -> AsyncGroq:
+    """Lazily construct the Groq client so missing env vars don't break import."""
+    global _client
+    if _client is None:
+        api_key = os.environ.get("GROQ_API_KEY")
+        if not api_key:
+            raise RuntimeError(
+                "GROQ_API_KEY environment variable is not set. "
+                "Add it to your .env file or environment."
+            )
+        _client = AsyncGroq(api_key=api_key)
+    return _client
 
 FAST_MODEL = "llama-3.1-8b-instant"
 SMART_MODEL = "llama-3.3-70b-versatile"
@@ -57,7 +71,7 @@ def _trim_messages_to_limit(messages: list, token_limit: int = 8000) -> list:
 async def chat(messages: list, model: str = SMART_MODEL, system: str = SYSTEM_PROMPT) -> str:
     full_messages = [{"role": "system", "content": system}] + messages
     full_messages = _trim_messages_to_limit(full_messages)
-    response = await client.chat.completions.create(
+    response = await _get_client().chat.completions.create(
         model=model,
         messages=full_messages,
         temperature=0.7,
@@ -67,7 +81,7 @@ async def chat(messages: list, model: str = SMART_MODEL, system: str = SYSTEM_PR
 
 
 async def transcribe_audio(audio_bytes: bytes, filename: str = "voice.ogg") -> str:
-    transcription = await client.audio.transcriptions.create(
+    transcription = await _get_client().audio.transcriptions.create(
         file=(filename, audio_bytes),
         model=WHISPER_MODEL,
         response_format="text",

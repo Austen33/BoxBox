@@ -57,6 +57,18 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await update.message.reply_text(text, parse_mode="Markdown")
 
 
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Log unhandled errors and tell the user something went wrong."""
+    logger.error("Unhandled exception while handling update", exc_info=context.error)
+    try:
+        if isinstance(update, Update) and update.effective_message is not None:
+            await update.effective_message.reply_text(
+                "Something went wrong on my end. Try again in a moment."
+            )
+    except Exception:
+        pass
+
+
 async def post_init(application: Application) -> None:
     commands = [
         BotCommand("start", "Welcome message and command list"),
@@ -108,6 +120,7 @@ def main() -> None:
     application.add_handler(
         MessageHandler(filters.VOICE, voice_handler)
     )
+    application.add_error_handler(error_handler)
 
     logger.info("BoxBox bot starting...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)

@@ -1,6 +1,8 @@
 import datetime
 import logging
 import hashlib
+import re
+from collections import OrderedDict
 import pandas as pd
 import pytz
 from telegram import Update
@@ -17,17 +19,23 @@ logger = logging.getLogger(__name__)
 
 _subscribers: set[int] = set()
 _scheduler: AsyncIOScheduler | None = None
-_seen_news_hashes: set[str] = set()
+# Use OrderedDict as a bounded FIFO cache of seen-news hashes.
+_MAX_SEEN_HASHES = 500
+_seen_news_hashes: "OrderedDict[str, None]" = OrderedDict()
 
-# Keywords that indicate breaking/important news
+# Keywords that indicate breaking/important news. Matched as whole words.
 BREAKING_KEYWORDS = [
-    "announced", "confirmed", "signs", "signed", "joins", "leaves", "sacked",
-    "penalty", "penalised", "disqualified", "banned", "fined",
-    "injured", "crash", "retire", "retirement", "replacing", "replaced",
-    "new team", "new driver", "reserve driver", "debut",
-    "rule change", "regulation", "technical directive",
-    "championship", "title", "clinch",
+    "announced", "confirmed", "signs", "signed", "joins", "sacked",
+    "penalised", "penalized", "disqualified", "banned", "fined",
+    "injured", "retires", "retirement",
+    "debut", "reserve driver", "new driver", "new team",
+    "rule change", "technical directive", "regulation change",
+    "clinches", "clinched",
 ]
+_BREAKING_RE = re.compile(
+    r"\b(?:" + "|".join(re.escape(k) for k in BREAKING_KEYWORDS) + r")\b",
+    re.IGNORECASE,
+)
 
 NEWS_SOURCES = [
     "formula1.com",
@@ -115,9 +123,19 @@ def _hash_news(title: str, url: str) -> str:
 
 
 def _is_breaking_news(title: str, content: str) -> bool:
-    """Check if news item contains breaking keywords."""
-    combined = f"{title} {content}".lower()
-    return any(kw in combined for kw in BREAKING_KEYWORDS)
+    """Check if news item contains breaking keywords (whole-word match)."""
+    combined = f"{title} {content}"
+    return bool(_BREAKING_RE.search(combined))
+
+
+def _mark_seen(news_hash: str) -> None:
+    """Record a hash in FIFO order, evicting the oldest when full."""
+    if news_hash in _seen_news_hashes:
+        _seen_news_hashes.move_to_end(news_hash)
+        return
+    _seen_news_hashes[news_hash] = None
+    while len(_seen_news_hashes) > _MAX_SEEN_HASHES:
+        _seen_news_hashes.popitem(last=False)
 
 
 async def _check_breaking_news(application: Application) -> None:
@@ -147,13 +165,8 @@ async def _check_breaking_news(application: Application) -> None:
             if news_hash in _seen_news_hashes:
                 continue
 
-            # Mark as seen
-            _seen_news_hashes.add(news_hash)
-
-            # Keep hash set from growing too large
-            if len(_seen_news_hashes) > 500:
-                # Remove oldest half (we can't know actual age, so just trim)
-                _seen_news_hashes.difference_update(set(list(_seen_news_hashes)[:250]))
+            # Mark as seen (FIFO eviction).
+            _mark_seen(news_hash)
 
             breaking_items.append({
                 "title": title,

@@ -1,5 +1,10 @@
+import asyncio
+import logging
 import os
 from tavily import AsyncTavilyClient
+
+logger = logging.getLogger(__name__)
+_SEARCH_TIMEOUT_SECONDS = 15.0
 
 _client = None
 
@@ -30,13 +35,30 @@ def get_tavily_client() -> AsyncTavilyClient:
 
 
 async def search(query: str, max_results: int = 5) -> list[dict]:
-    client = get_tavily_client()
-    response = await client.search(
-        query=query,
-        search_depth="advanced",
-        include_domains=ALLOWED_DOMAINS,
-        max_results=max_results,
-    )
+    """Run a Tavily search; return [] on timeout or any error."""
+    try:
+        client = get_tavily_client()
+    except KeyError:
+        logger.warning("TAVILY_API_KEY not set; skipping live search.")
+        return []
+
+    try:
+        response = await asyncio.wait_for(
+            client.search(
+                query=query,
+                search_depth="advanced",
+                include_domains=ALLOWED_DOMAINS,
+                max_results=max_results,
+            ),
+            timeout=_SEARCH_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        logger.warning("Tavily search timed out for query: %s", query)
+        return []
+    except Exception as e:
+        logger.warning("Tavily search failed for query '%s': %s", query, e)
+        return []
+
     return response.get("results", [])
 
 

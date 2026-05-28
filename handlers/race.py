@@ -1,8 +1,10 @@
+import asyncio
 from telegram import Update
 from telegram.ext import ContextTypes
 from utils.f1_data import get_next_race_info
 from utils.groq_client import chat, FAST_MODEL
 from utils.rate_limit import is_rate_limited
+from utils.telegram_safe import safe_reply
 
 
 async def race_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -13,7 +15,7 @@ async def race_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     await update.message.reply_chat_action("typing")
 
-    race_info = get_next_race_info()
+    race_info = await asyncio.to_thread(get_next_race_info)
 
     if race_info is None:
         await update.message.reply_text(
@@ -47,4 +49,4 @@ Just give the race name, countdown, and session times. Nothing else."""
         model=FAST_MODEL,
     )
 
-    await update.message.reply_text(response, parse_mode="Markdown")
+    await safe_reply(update.message, response)

@@ -4,6 +4,8 @@ from telegram.ext import ContextTypes
 from utils.groq_client import transcribe_audio, chat, SMART_MODEL
 from utils.tavily_client import search, format_search_results
 from utils.rate_limit import is_rate_limited
+from utils.telegram_safe import safe_reply
+from handlers.ask import LIVE_KEYWORDS
 
 
 async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -30,11 +32,8 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             await update.message.reply_text("Couldn't make out what you said. Try again?")
             return
 
-        needs_live_search = any(word in transcript.lower() for word in [
-            "latest", "recent", "now", "current", "today", "this week", "this season",
-            "2024", "2025", "2026", "news", "rumour", "rumor", "update", "just",
-            "announce", "signed", "confirmed", "breaking"
-        ])
+        transcript_lower = transcript.lower()
+        needs_live_search = any(kw in transcript_lower for kw in LIVE_KEYWORDS)
 
         search_context = ""
         if needs_live_search:
@@ -56,7 +55,7 @@ Use search results if they are relevant. Be honest if uncertain."""
         )
 
         full_reply = f'_You said: "{transcript}"_\n\n{response}'
-        await update.message.reply_text(full_reply, parse_mode="Markdown")
+        await safe_reply(update.message, full_reply)
 
     except Exception as e:
         await update.message.reply_text(

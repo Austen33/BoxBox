@@ -1,9 +1,11 @@
+import asyncio
 from telegram import Update
 from telegram.ext import ContextTypes
 from utils.f1_data import get_qualifying_results, get_next_race_info, get_current_season
 from utils.groq_client import chat, SMART_MODEL
 from utils.tavily_client import search, format_search_results
 from utils.rate_limit import is_rate_limited
+from utils.telegram_safe import safe_reply
 
 
 async def predict_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -14,8 +16,10 @@ async def predict_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     await update.message.reply_chat_action("typing")
 
-    qual_data = get_qualifying_results()
-    next_race = get_next_race_info()
+    qual_data, next_race = await asyncio.gather(
+        asyncio.to_thread(get_qualifying_results),
+        asyncio.to_thread(get_next_race_info),
+    )
 
     race_name = "the upcoming race"
     circuit_name = ""
@@ -60,4 +64,4 @@ Be honest if it's hard to call."""
         model=SMART_MODEL,
     )
 
-    await update.message.reply_text(response, parse_mode="Markdown")
+    await safe_reply(update.message, response)

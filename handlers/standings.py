@@ -3,6 +3,7 @@ from telegram import Update
 from telegram.ext import ContextTypes
 from utils.f1_data import get_driver_standings, get_constructor_standings
 from utils.rate_limit import is_rate_limited
+from utils.telegram_safe import safe_reply
 
 
 async def standings_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -40,4 +41,4 @@ async def standings_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         msg = constructors.get("error", "unavailable") if constructors else "unavailable"
         lines.append(f"Constructors standings unavailable: {msg}")
 
-    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+    await safe_reply(update.message, "\n".join(lines))

@@ -1,9 +1,11 @@
+import asyncio
 from telegram import Update
 from telegram.ext import ContextTypes
 from utils.f1_data import get_lap_data_for_strategy
 from utils.groq_client import chat, SMART_MODEL
 from utils.tavily_client import search, format_search_results
 from utils.rate_limit import is_rate_limited
+from utils.telegram_safe import safe_reply
 
 
 async def strategy_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -14,7 +16,7 @@ async def strategy_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     await update.message.reply_chat_action("typing")
 
-    strategy_data = get_lap_data_for_strategy()
+    strategy_data = await asyncio.to_thread(get_lap_data_for_strategy)
 
     if strategy_data is None or "error" in strategy_data:
         error_msg = strategy_data.get("error", "unknown") if strategy_data else "unknown"
@@ -64,4 +66,4 @@ Make this feel like proper analysis, not a Wikipedia summary."""
         model=SMART_MODEL,
     )
 
-    await update.message.reply_text(response, parse_mode="Markdown")
+    await safe_reply(update.message, response)

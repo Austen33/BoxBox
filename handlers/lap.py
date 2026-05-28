@@ -7,6 +7,7 @@ from telegram.ext import ContextTypes
 from utils.f1_data import get_current_season, get_event_schedule, UTC_TZ
 from utils.groq_client import chat, FAST_MODEL
 from utils.rate_limit import is_rate_limited
+from utils.telegram_safe import safe_reply
 
 VALID_SESSIONS = {"FP1", "FP2", "FP3", "Q", "S", "SQ", "R"}
 
@@ -119,4 +120,4 @@ personal strengths vs where time was lost to the session best, the tyre choice,
 and how it stacks up. Use only the data above. No filler."""
 
     response = await chat(messages=[{"role": "user", "content": prompt}], model=FAST_MODEL)
-    await update.message.reply_text(f"{data_text}\n\n{response}", parse_mode="Markdown")
+    await safe_reply(update.message, f"{data_text}\n\n{response}")

@@ -5,8 +5,17 @@ import aiohttp
 from utils.groq_client import chat, SMART_MODEL
 from utils.tavily_client import search, format_search_results
 from utils.rate_limit import is_rate_limited
+from utils.telegram_safe import safe_reply
 
 JOLPI_BASE = "https://api.jolpi.ca/ergast/f1"
+
+
+def _safe_int(value, default: int) -> int:
+    """Best-effort int parse. Ergast can return '', 'R', or other non-numeric values."""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
 
 
 async def _fetch_driver_results_at_circuit(driver_id: str, circuit_id: str, limit: int = 10) -> list[dict]:
@@ -190,8 +199,8 @@ async def _fetch_driver_career_stats(driver_id: str) -> dict | None:
                 for race in races:
                     stats["seasons"].add(race.get("season", "?"))
                     for result in race.get("Results", []):
-                        pos = int(result.get("position", 20))
-                        grid = int(result.get("grid", 0))
+                        pos = _safe_int(result.get("position"), 20)
+                        grid = _safe_int(result.get("grid"), 0)
                         status = result.get("status", "")
 
                         if pos == 1:
@@ -277,7 +286,7 @@ Search results:
 Summarize the driver's historical performance at this circuit in 3-4 sentences.
 Include wins, podiums, notable moments, and general form."""
             response = await chat(messages=[{"role": "user", "content": prompt}], model=SMART_MODEL)
-            await update.message.reply_text(response, parse_mode="Markdown")
+            await safe_reply(update.message, response)
             return
 
         await update.message.reply_text(
@@ -316,7 +325,7 @@ Give a 2-3 sentence analysis of this driver's form at this circuit.
 What patterns do you see? Any standout performances or struggles?"""
 
     response = await chat(messages=[{"role": "user", "content": prompt}], model=SMART_MODEL)
-    await update.message.reply_text(f"{text}{summary}\n\n{response}", parse_mode="Markdown")
+    await safe_reply(update.message, f"{text}{summary}\n\n{response}")
 
 
 async def career_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -366,7 +375,7 @@ Provide a career overview in 4-5 sentences covering:
 3. Teams driven for
 4. Notable achievements or records"""
             response = await chat(messages=[{"role": "user", "content": prompt}], model=SMART_MODEL)
-            await update.message.reply_text(response, parse_mode="Markdown")
+            await safe_reply(update.message, response)
             return
 
         await update.message.reply_text(f"Couldn't fetch career data for {driver_input}.")
@@ -392,4 +401,4 @@ Provide a brief 3-4 sentence career narrative:
 3. Career trajectory (rising, peak, veteran)?"""
 
     response = await chat(messages=[{"role": "user", "content": prompt}], model=SMART_MODEL)
-    await update.message.reply_text(f"{text}\n\n{response}", parse_mode="Markdown")
+    await safe_reply(update.message, f"{text}\n\n{response}")

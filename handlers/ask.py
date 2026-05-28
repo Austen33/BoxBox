@@ -5,6 +5,7 @@ from utils.groq_client import chat, SMART_MODEL
 from utils.tavily_client import search, format_search_results
 from utils.f1_data import get_last_race_results, get_driver_standings, get_constructor_standings
 from utils.rate_limit import is_rate_limited
+from utils.telegram_safe import safe_reply
 
 STANDINGS_KEYWORDS = [
     "standings", "championship", "points", "who is leading", "who's leading",
@@ -96,4 +97,4 @@ If you are not certain about something, say so rather than guessing."""
         model=SMART_MODEL,
     )
 
-    await update.message.reply_text(response, parse_mode="Markdown")
+    await safe_reply(update.message, response)

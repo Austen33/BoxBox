@@ -5,6 +5,7 @@ from utils.f1_data import get_next_race_info, get_qualifying_results
 from utils.groq_client import chat, SMART_MODEL
 from utils.tavily_client import search, format_search_results
 from utils.rate_limit import is_rate_limited
+from utils.telegram_safe import safe_reply
 
 
 async def fantasy_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -15,11 +16,12 @@ async def fantasy_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     await update.message.reply_chat_action("typing")
 
-    next_race = get_next_race_info()
+    next_race, qual_data = await asyncio.gather(
+        asyncio.to_thread(get_next_race_info),
+        asyncio.to_thread(get_qualifying_results),
+    )
     race_name = next_race["name"] if next_race else "the next race"
     circuit = f"{next_race['location']}, {next_race['country']}" if next_race else ""
-
-    qual_data = get_qualifying_results()
     qual_summary = ""
     if qual_data and "error" not in qual_data:
         qual_summary = "Qualifying grid:\n"
@@ -64,4 +66,4 @@ Don't hedge everything. Make actual recommendations with actual reasoning."""
         model=SMART_MODEL,
     )
 
-    await update.message.reply_text(response, parse_mode="Markdown")
+    await safe_reply(update.message, response)
