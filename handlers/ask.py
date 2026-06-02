@@ -21,20 +21,13 @@ LIVE_KEYWORDS = [
     "season", "lineup", "constructor",
 ]
 
+_RACE_RESULT_KEYWORDS = [
+    "last race", "most recent race", "most recent", "recent race",
+    "race result", "podium", "who won", "winner",
+]
 
-async def ask_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    user_id = update.effective_user.id
-    if is_rate_limited(user_id):
-        await update.message.reply_text("Slow down — one question at a time.")
-        return
 
-    query = " ".join(context.args) if context.args else ""
-    if not query:
-        await update.message.reply_text("What do you want to know? Try /ask who has the most wins at Monaco")
-        return
-
-    await update.message.reply_chat_action("typing")
-
+async def get_f1_response(query: str, for_voice: bool = False) -> str:
     query_lower = query.lower()
     needs_standings_data = any(kw in query_lower for kw in STANDINGS_KEYWORDS)
     needs_live_search = needs_standings_data or any(kw in query_lower for kw in LIVE_KEYWORDS)
@@ -85,16 +78,19 @@ async def ask_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if search_context:
         combined_context += search_context
 
-    race_result_query = any(kw in query_lower for kw in [
-        "last race", "most recent race", "most recent", "recent race",
-        "race result", "podium", "who won", "winner",
-    ])
+    race_result_query = any(kw in query_lower for kw in _RACE_RESULT_KEYWORDS)
 
-    formatting_instruction = (
-        "\nPresent race results as a clean list (P1/P2/P3 etc.) with driver and team. "
-        "Do not explain how you found the data or hedge about sources. Just give the result directly."
-        if race_result_query and f1_context else ""
-    )
+    if for_voice:
+        formatting_instruction = (
+            "\nKeep the response concise and conversational — it will be spoken aloud as a voice note. "
+            "No bullet points, no markdown, no formatting symbols."
+        )
+    else:
+        formatting_instruction = (
+            "\nPresent race results as a clean list (P1/P2/P3 etc.) with driver and team. "
+            "Do not explain how you found the data or hedge about sources. Just give the result directly."
+            if race_result_query and f1_context else ""
+        )
 
     prompt = f"""The user is asking: {query}
 
@@ -104,9 +100,23 @@ Answer this F1 question accurately. Prioritise the live F1 data over search resu
 For historical or technical questions, draw on your training knowledge.
 Keep the answer concise and to the point. If you are not certain about something, say so.{formatting_instruction}"""
 
-    response = await chat(
+    return await chat(
         messages=[{"role": "user", "content": prompt}],
         model=SMART_MODEL,
     )
 
+
+async def ask_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = update.effective_user.id
+    if is_rate_limited(user_id):
+        await update.message.reply_text("Slow down — one question at a time.")
+        return
+
+    query = " ".join(context.args) if context.args else ""
+    if not query:
+        await update.message.reply_text("What do you want to know? Try /ask who has the most wins at Monaco")
+        return
+
+    await update.message.reply_chat_action("typing")
+    response = await get_f1_response(query)
     await safe_reply(update.message, response)

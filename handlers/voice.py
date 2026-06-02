@@ -1,12 +1,14 @@
 import io
+import logging
 import aiohttp
 from telegram import InputFile, Update
 from telegram.ext import ContextTypes
-from utils.groq_client import transcribe_audio, chat, synthesize_speech, SMART_MODEL
-from utils.tavily_client import search, format_search_results
+from utils.groq_client import transcribe_audio, synthesize_speech
 from utils.rate_limit import is_rate_limited
 from utils.telegram_safe import safe_reply
-from handlers.ask import LIVE_KEYWORDS
+from handlers.ask import get_f1_response
+
+logger = logging.getLogger(__name__)
 
 
 async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -33,28 +35,7 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             await update.message.reply_text("Couldn't make out what you said. Try again?")
             return
 
-        transcript_lower = transcript.lower()
-        needs_live_search = any(kw in transcript_lower for kw in LIVE_KEYWORDS)
-
-        search_context = ""
-        if needs_live_search:
-            results = await search(f"F1 {transcript}", max_results=5)
-            if results:
-                search_context = f"\n\nRecent F1 source results:\n{format_search_results(results)}"
-
-        prompt = f"""The user sent a voice note. Here is what they said:
-"{transcript}"
-
-{search_context}
-
-Answer their F1 question or respond to what they said.
-Use search results if they are relevant. Be honest if uncertain.
-Keep the response concise — it will be spoken aloud as a voice note, so avoid bullet lists and markdown."""
-
-        response = await chat(
-            messages=[{"role": "user", "content": prompt}],
-            model=SMART_MODEL,
-        )
+        response = await get_f1_response(transcript, for_voice=True)
 
         await update.message.reply_chat_action("record_voice")
 
@@ -66,10 +47,12 @@ Keep the response concise — it will be spoken aloud as a voice note, so avoid 
                 caption=f'"{transcript}"',
             )
         except Exception:
+            logger.exception("TTS failed, falling back to text reply")
             full_reply = f'_You said: "{transcript}"_\n\n{response}'
             await safe_reply(update.message, full_reply)
 
     except Exception:
+        logger.exception("Voice handler error")
         await update.message.reply_text(
             "Something went wrong processing your voice note. Try typing your question instead."
         )
