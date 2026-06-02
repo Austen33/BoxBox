@@ -23,6 +23,7 @@ from handlers.h2h import h2h_handler
 from handlers.notify import notify_handler, setup_scheduler
 from handlers.history import history_handler, career_handler
 from handlers.rewind import rewind_handler
+from handlers.result import result_handler
 
 load_dotenv()
 
@@ -68,6 +69,7 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         "/history \\[driver\\] \\[circuit\\] — driver's past results at a track\n"
         "/career \\[driver\\] — complete career statistics\n"
         "/rewind \\[circuit\\] \\[year\\] — relive key moments from any past race\n"
+        "/result — latest race result with concise DNF reasons\n"
         "/notify — toggle session reminders and breaking news alerts\n"
         "\n"
         "You can also send a *voice note* and I'll transcribe it and answer like an /ask query.\n\n"
@@ -104,6 +106,7 @@ async def post_init(application: Application) -> None:
         BotCommand("career", "Complete driver career statistics"),
         BotCommand("notify", "Toggle session reminders and breaking news"),
         BotCommand("rewind", "Relive key moments from a past race"),
+        BotCommand("result", "Latest race result with DNF reasons"),
     ]
     await application.bot.set_my_commands(commands)
     setup_scheduler(application)
@@ -137,6 +140,7 @@ def main() -> None:
     application.add_handler(CommandHandler("career", career_handler))
     application.add_handler(CommandHandler("notify", notify_handler))
     application.add_handler(CommandHandler("rewind", rewind_handler))
+    application.add_handler(CommandHandler("result", result_handler))
     application.add_handler(
         MessageHandler(filters.VOICE, voice_handler)
     )

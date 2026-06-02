@@ -484,6 +484,53 @@ def get_race_rewind_data(year: int, round_number: int) -> dict | None:
         return {"error": str(e)}
 
 
+async def get_full_race_results_async(year: int = None) -> dict | None:
+    """Returns all drivers with status, gap, and grid position."""
+    if year is None:
+        year = get_current_season()
+    url = f"{JOLPI_BASE}/{year}/last/results.json"
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                if resp.status != 200:
+                    return {"error": f"API returned {resp.status}"}
+                data = await resp.json()
+
+        races = data["MRData"]["RaceTable"]["Races"]
+        if not races:
+            return {"error": "No race results available"}
+
+        race = races[0]
+        results = []
+        for r in race.get("Results", []):
+            driver = r.get("Driver", {})
+            constructor = r.get("Constructor", {})
+            status = r.get("status", "")
+            position_text = r.get("positionText", "")
+            time_info = r.get("Time", {})
+            gap = time_info.get("time", "") if time_info else ""
+            results.append({
+                "position": int(r.get("position", 0)),
+                "position_text": position_text,
+                "driver": f"{driver.get('givenName', '')} {driver.get('familyName', '')}".strip(),
+                "team": constructor.get("name", "Unknown"),
+                "abbreviation": driver.get("code", ""),
+                "status": status,
+                "gap": gap,
+                "grid": int(r.get("grid", 0)),
+                "laps": int(r.get("laps", 0)),
+            })
+
+        return {
+            "name": race.get("raceName", "Unknown"),
+            "year": int(race.get("season", year)),
+            "round": int(race.get("round", 0)),
+            "results": results,
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
 async def get_last_race_results_async(year: int = None) -> dict | None:
     if year is None:
         year = get_current_season()
