@@ -1,7 +1,8 @@
+import io
 import aiohttp
-from telegram import Update
+from telegram import InputFile, Update
 from telegram.ext import ContextTypes
-from utils.groq_client import transcribe_audio, chat, SMART_MODEL
+from utils.groq_client import transcribe_audio, chat, synthesize_speech, SMART_MODEL
 from utils.tavily_client import search, format_search_results
 from utils.rate_limit import is_rate_limited
 from utils.telegram_safe import safe_reply
@@ -47,17 +48,28 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 {search_context}
 
 Answer their F1 question or respond to what they said.
-Use search results if they are relevant. Be honest if uncertain."""
+Use search results if they are relevant. Be honest if uncertain.
+Keep the response concise — it will be spoken aloud as a voice note, so avoid bullet lists and markdown."""
 
         response = await chat(
             messages=[{"role": "user", "content": prompt}],
             model=SMART_MODEL,
         )
 
-        full_reply = f'_You said: "{transcript}"_\n\n{response}'
-        await safe_reply(update.message, full_reply)
+        await update.message.reply_chat_action("record_voice")
 
-    except Exception as e:
+        try:
+            tts_bytes = await synthesize_speech(response)
+            voice_buf = io.BytesIO(tts_bytes)
+            await update.message.reply_voice(
+                voice=InputFile(voice_buf, filename="response.ogg"),
+                caption=f'"{transcript}"',
+            )
+        except Exception:
+            full_reply = f'_You said: "{transcript}"_\n\n{response}'
+            await safe_reply(update.message, full_reply)
+
+    except Exception:
         await update.message.reply_text(
-            f"Something went wrong processing your voice note. Try typing your question instead."
+            "Something went wrong processing your voice note. Try typing your question instead."
         )

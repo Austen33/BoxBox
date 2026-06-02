@@ -1,4 +1,5 @@
 import os
+import re
 from groq import AsyncGroq
 
 _client: AsyncGroq | None = None
@@ -20,6 +21,27 @@ def _get_client() -> AsyncGroq:
 FAST_MODEL = "llama-3.1-8b-instant"
 SMART_MODEL = "llama-3.3-70b-versatile"
 WHISPER_MODEL = "whisper-large-v3-turbo"
+TTS_MODEL = "playai-tts"
+TTS_VOICE = "Fritz-PlayAI"
+
+_MARKDOWN_RE = re.compile(r"[*_`\[\]\\]")
+
+
+def _strip_markdown(text: str) -> str:
+    return _MARKDOWN_RE.sub("", text).strip()
+
+
+async def synthesize_speech(text: str) -> bytes:
+    cleaned = _strip_markdown(text)
+    if len(cleaned) > 4096:
+        cleaned = cleaned[:4096]
+    response = await _get_client().audio.speech.create(
+        model=TTS_MODEL,
+        voice=TTS_VOICE,
+        input=cleaned,
+        response_format="opus",
+    )
+    return response.content
 
 SYSTEM_PROMPT = """You are BoxBox, a Telegram F1 bot. You are a knowledgeable mate who follows F1 obsessively.
 
