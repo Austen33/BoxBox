@@ -9,7 +9,8 @@ from utils.telegram_safe import safe_reply
 
 STANDINGS_KEYWORDS = [
     "standings", "championship", "points", "who is leading", "who's leading",
-    "results", "last race", "winner", "who won",
+    "results", "last race", "most recent race", "most recent", "recent race",
+    "winner", "who won", "podium", "race result",
 ]
 
 LIVE_KEYWORDS = [
@@ -68,7 +69,7 @@ async def ask_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
         if race_data and "error" not in race_data:
             f1_context += f"Last race: {race_data['name']} {race_data['year']}\n"
-            for r in race_data["results"][:5]:
+            for r in race_data["results"]:
                 f1_context += f"P{int(r['position'])}: {r['driver']} ({r['team']})\n"
             f1_context += "\n"
 
@@ -84,13 +85,24 @@ async def ask_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if search_context:
         combined_context += search_context
 
+    race_result_query = any(kw in query_lower for kw in [
+        "last race", "most recent race", "most recent", "recent race",
+        "race result", "podium", "who won", "winner",
+    ])
+
+    formatting_instruction = (
+        "\nPresent race results as a clean list (P1/P2/P3 etc.) with driver and team. "
+        "Do not explain how you found the data or hedge about sources. Just give the result directly."
+        if race_result_query and f1_context else ""
+    )
+
     prompt = f"""The user is asking: {query}
 
 {combined_context}
 
-Answer this F1 question accurately. Prioritise the live F1 data and search results over any training knowledge for current season information.
+Answer this F1 question accurately. Prioritise the live F1 data over search results over training knowledge for current season info.
 For historical or technical questions, draw on your training knowledge.
-If you are not certain about something, say so rather than guessing."""
+Keep the answer concise and to the point. If you are not certain about something, say so.{formatting_instruction}"""
 
     response = await chat(
         messages=[{"role": "user", "content": prompt}],

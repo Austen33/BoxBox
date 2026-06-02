@@ -56,55 +56,109 @@ def format_session_time(dt, timezone=IRISH_TZ) -> str:
     return local_dt.strftime("%a %d %b, %H:%M")
 
 
-def get_next_race_info() -> dict | None:
-    event = get_next_event()
-    if event is None:
+_race_info_cache: dict | None = None
+_race_info_cache_time: datetime | None = None
+_RACE_INFO_CACHE_TTL = 3600  # seconds
+
+
+def _parse_jolpi_dt(date_str: str, time_str: str) -> datetime | None:
+    try:
+        return datetime.fromisoformat(f"{date_str}T{time_str}".replace("Z", "+00:00"))
+    except Exception:
         return None
 
-    sessions = {}
-    session_names = {
-        "Session1": event.get("Session1"),
-        "Session2": event.get("Session2"),
-        "Session3": event.get("Session3"),
-        "Session4": event.get("Session4"),
-        "Session5": event.get("Session5"),
-    }
-    session_dates = {
-        "Session1": event.get("Session1Date"),
-        "Session2": event.get("Session2Date"),
-        "Session3": event.get("Session3Date"),
-        "Session4": event.get("Session4Date"),
-        "Session5": event.get("Session5Date"),
-    }
 
-    for key in ["Session1", "Session2", "Session3", "Session4", "Session5"]:
-        name = session_names.get(key)
-        date = session_dates.get(key)
-        if name and not pd.isna(name):
-            sessions[name] = format_session_time(date)
+async def get_next_race_info() -> dict | None:
+    global _race_info_cache, _race_info_cache_time
 
-    race_date = event.get("Session5Date")
     now_utc = datetime.now(UTC_TZ)
-    if race_date and not pd.isna(race_date):
-        if hasattr(race_date, "tzinfo") and race_date.tzinfo is None:
-            race_date = UTC_TZ.localize(race_date)
-        delta = race_date - now_utc
-        days = delta.days
-        hours, remainder = divmod(delta.seconds, 3600)
-        minutes = remainder // 60
-        countdown = f"{days}d {hours}h {minutes}m"
-    else:
-        countdown = "TBC"
+    if (
+        _race_info_cache is not None
+        and _race_info_cache_time is not None
+        and (now_utc - _race_info_cache_time).total_seconds() < _RACE_INFO_CACHE_TTL
+    ):
+        return _race_info_cache
 
-    return {
-        "name": event.get("EventName", "Unknown Event"),
-        "country": event.get("Country", ""),
-        "location": event.get("Location", ""),
-        "round": event.get("RoundNumber", ""),
-        "sessions": sessions,
-        "countdown": countdown,
-        "race_date_formatted": format_session_time(event.get("Session5Date")),
-    }
+    year = get_current_season()
+    url = f"{JOLPI_BASE}/{year}.json?limit=30"
+
+    try:
+        async with aiohttp.ClientSession() as http:
+            async with http.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                if resp.status != 200:
+                    return None
+                data = await resp.json()
+
+        races = data["MRData"]["RaceTable"]["Races"]
+
+        next_race = None
+        for race in races:
+            race_date_str = race.get("date")
+            race_time_str = race.get("time", "00:00:00Z")
+            if not race_date_str:
+                continue
+            race_dt = _parse_jolpi_dt(race_date_str, race_time_str)
+            if race_dt and race_dt > now_utc:
+                next_race = race
+                break
+
+        if next_race is None:
+            return None
+
+        def _fmt(dt: datetime | None) -> str:
+            if dt is None:
+                return "TBC"
+            return dt.astimezone(IRISH_TZ).strftime("%a %d %b, %H:%M")
+
+        def _session_dt(key: str) -> datetime | None:
+            s = next_race.get(key)
+            if not s:
+                return None
+            return _parse_jolpi_dt(s.get("date", ""), s.get("time", "00:00:00Z"))
+
+        sessions = {}
+        for api_key, label in [
+            ("FirstPractice", "Practice 1"),
+            ("SecondPractice", "Practice 2"),
+            ("ThirdPractice", "Practice 3"),
+            ("SprintQualifying", "Sprint Qualifying"),
+            ("Sprint", "Sprint"),
+            ("Qualifying", "Qualifying"),
+        ]:
+            dt = _session_dt(api_key)
+            if dt:
+                sessions[label] = _fmt(dt)
+
+        race_dt = _parse_jolpi_dt(next_race["date"], next_race.get("time", "00:00:00Z"))
+        sessions["Race"] = _fmt(race_dt)
+
+        if race_dt:
+            delta = race_dt - now_utc
+            days = delta.days
+            hours, remainder = divmod(delta.seconds, 3600)
+            minutes = remainder // 60
+            countdown = f"{days}d {hours}h {minutes}m"
+        else:
+            countdown = "TBC"
+
+        circuit = next_race.get("Circuit", {})
+        location_data = circuit.get("Location", {})
+
+        result = {
+            "name": next_race.get("raceName", "Unknown Event"),
+            "country": location_data.get("country", ""),
+            "location": location_data.get("locality", ""),
+            "round": next_race.get("round", ""),
+            "sessions": sessions,
+            "countdown": countdown,
+        }
+
+        _race_info_cache = result
+        _race_info_cache_time = now_utc
+        return result
+
+    except Exception:
+        return None
 
 
 def get_last_race_results(year: int = None, round_number: int = None) -> dict | None:

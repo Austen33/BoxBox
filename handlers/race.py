@@ -1,4 +1,3 @@
-import asyncio
 from telegram import Update
 from telegram.ext import ContextTypes
 from utils.f1_data import get_next_race_info
@@ -15,7 +14,7 @@ async def race_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     await update.message.reply_chat_action("typing")
 
-    race_info = await asyncio.to_thread(get_next_race_info)
+    race_info = await get_next_race_info()
 
     if race_info is None:
         await update.message.reply_text(
