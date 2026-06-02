@@ -32,9 +32,10 @@ WHISPER_MODEL = "whisper-large-v3-turbo"
 # Natural, fluent voices. Requires ELEVENLABS_API_KEY. Default voice is
 # "Daniel" — a calm, clear British presenter tone that suits a race engineer.
 # Browse/override voices at https://elevenlabs.io/app/voice-library.
-ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
-ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID", "onwK4e9ZLuTAKqWW03F9")  # Daniel
-ELEVENLABS_MODEL = os.getenv("ELEVENLABS_MODEL", "eleven_multilingual_v2")
+# NOTE: read lazily (not at import) because load_dotenv() runs after the
+# handler imports in main.py, so these env vars aren't set yet at import time.
+DEFAULT_ELEVENLABS_VOICE_ID = "onwK4e9ZLuTAKqWW03F9"  # Daniel
+DEFAULT_ELEVENLABS_MODEL = "eleven_multilingual_v2"
 
 # --- Groq Orpheus (fallback TTS) ------------------------------------------
 TTS_MODEL = "canopylabs/orpheus-v1-english"
@@ -105,18 +106,22 @@ async def _elevenlabs_mp3(text: str) -> bytes | None:
     Tuned for a calm, clear delivery: higher stability keeps the voice steady
     rather than dramatic, and speaker boost improves clarity.
     """
-    if not ELEVENLABS_API_KEY:
+    api_key = os.getenv("ELEVENLABS_API_KEY")
+    if not api_key:
         return None
 
+    voice_id = os.getenv("ELEVENLABS_VOICE_ID", DEFAULT_ELEVENLABS_VOICE_ID)
+    model_id = os.getenv("ELEVENLABS_MODEL", DEFAULT_ELEVENLABS_MODEL)
+
     text = _strip_emotion_tags(text)
-    url = f"https://api.elevenlabs.io/v1/text-to-speech/{ELEVENLABS_VOICE_ID}"
+    url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
     headers = {
-        "xi-api-key": ELEVENLABS_API_KEY,
+        "xi-api-key": api_key,
         "Content-Type": "application/json",
     }
     payload = {
         "text": text,
-        "model_id": ELEVENLABS_MODEL,
+        "model_id": model_id,
         "voice_settings": {
             "stability": 0.6,
             "similarity_boost": 0.75,
