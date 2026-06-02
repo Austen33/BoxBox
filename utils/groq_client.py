@@ -3,7 +3,6 @@ import logging
 import os
 import re
 import shutil
-import httpx
 from groq import AsyncGroq
 
 logger = logging.getLogger(__name__)
@@ -28,14 +27,11 @@ FAST_MODEL = "llama-3.1-8b-instant"
 SMART_MODEL = "llama-3.3-70b-versatile"
 WHISPER_MODEL = "whisper-large-v3-turbo"
 
-# --- ElevenLabs (primary TTS) ---------------------------------------------
-# Natural, fluent voices. Requires ELEVENLABS_API_KEY. Default voice is
-# "Daniel" — a calm, clear British presenter tone that suits a race engineer.
-# Browse/override voices at https://elevenlabs.io/app/voice-library.
-# NOTE: read lazily (not at import) because load_dotenv() runs after the
-# handler imports in main.py, so these env vars aren't set yet at import time.
-DEFAULT_ELEVENLABS_VOICE_ID = "onwK4e9ZLuTAKqWW03F9"  # Daniel
-DEFAULT_ELEVENLABS_MODEL = "eleven_multilingual_v2"
+# --- edge-tts (primary TTS) -----------------------------------------------
+# Microsoft neural voices via Edge read-aloud. Free, no API key required.
+# Default: en-GB-RyanNeural — calm, clear British male.
+# Override via EDGE_TTS_VOICE env var. Full voice list: `edge-tts --list-voices`
+EDGE_TTS_VOICE = os.getenv("EDGE_TTS_VOICE", "en-GB-RyanNeural")
 
 # --- Groq Orpheus (fallback TTS) ------------------------------------------
 TTS_MODEL = "canopylabs/orpheus-v1-english"
@@ -100,52 +96,17 @@ async def _convert_to_ogg_opus(
     return stdout
 
 
-async def _elevenlabs_mp3(text: str) -> bytes | None:
-    """Synthesize speech with ElevenLabs. Returns MP3 bytes, or None if unavailable.
-
-    Tuned for a calm, clear delivery: higher stability keeps the voice steady
-    rather than dramatic, and speaker boost improves clarity.
-    """
-    api_key = os.getenv("ELEVENLABS_API_KEY")
-    if not api_key:
-        return None
-
-    voice_id = os.getenv("ELEVENLABS_VOICE_ID", DEFAULT_ELEVENLABS_VOICE_ID)
-    model_id = os.getenv("ELEVENLABS_MODEL", DEFAULT_ELEVENLABS_MODEL)
-
+async def _edge_tts_mp3(text: str) -> bytes:
+    """Synthesize speech with Microsoft edge-tts. Free, no API key required."""
+    import edge_tts
     text = _strip_emotion_tags(text)
-    url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
-    headers = {
-        "xi-api-key": api_key,
-        "Content-Type": "application/json",
-    }
-    payload = {
-        "text": text,
-        "model_id": model_id,
-        "voice_settings": {
-            "stability": 0.6,
-            "similarity_boost": 0.75,
-            "style": 0.0,
-            "use_speaker_boost": True,
-        },
-    }
-    try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            resp = await client.post(
-                url,
-                headers=headers,
-                json=payload,
-                params={"output_format": "mp3_44100_128"},
-            )
-        if resp.status_code != 200:
-            logger.warning(
-                "ElevenLabs TTS returned %s: %s", resp.status_code, resp.text[:300]
-            )
-            return None
-        return resp.content or None
-    except Exception:
-        logger.warning("ElevenLabs TTS request failed", exc_info=True)
-        return None
+    voice = os.getenv("EDGE_TTS_VOICE", EDGE_TTS_VOICE)
+    communicate = edge_tts.Communicate(text, voice)
+    audio = b""
+    async for chunk in communicate.stream():
+        if chunk["type"] == "audio":
+            audio += chunk["data"]
+    return audio
 
 
 async def _gtts_mp3(text: str) -> bytes:
@@ -174,19 +135,20 @@ async def synthesize_speech(text: str) -> tuple[bytes, str]:
         cleaned = cleaned[:4096]
 
     source_bytes: bytes | None = None
-    source_fmt = "wav"
-    # ElevenLabs is naturally paced; the atempo speed-up only helps the slower
-    # Orpheus/gTTS fallbacks, so track whether to apply it.
-    convert_speed = TTS_SPEED
+    source_fmt = "mp3"
+    convert_speed = 1.0
 
-    # 1. ElevenLabs (preferred) -> MP3
-    el_mp3 = await _elevenlabs_mp3(cleaned)
-    if el_mp3:
-        source_bytes = el_mp3
+    # 1. edge-tts (preferred) — free, no API key, natural neural voice -> MP3
+    try:
+        source_bytes = await _edge_tts_mp3(cleaned)
         source_fmt = "mp3"
-        convert_speed = 1.0
-    else:
+        logger.info("TTS: edge-tts OK (%d bytes)", len(source_bytes))
+    except Exception:
+        logger.warning("edge-tts failed, trying Groq Orpheus", exc_info=True)
+
+    if not source_bytes:
         # 2. Groq Orpheus -> WAV
+        convert_speed = TTS_SPEED
         try:
             response = await _get_client().audio.speech.create(
                 model=TTS_MODEL,
@@ -198,13 +160,15 @@ async def synthesize_speech(text: str) -> tuple[bytes, str]:
             if wav:
                 source_bytes = wav
                 source_fmt = "wav"
+                logger.info("TTS: Groq Orpheus OK (%d bytes)", len(wav))
         except Exception:
             logger.warning("Groq TTS unavailable, using gTTS fallback", exc_info=True)
 
     # 3. gTTS (last resort) -> MP3
-    if source_bytes is None:
+    if not source_bytes:
         source_bytes = await _gtts_mp3(cleaned)
         source_fmt = "mp3"
+        logger.info("TTS: gTTS fallback")
 
     # Convert to OGG/Opus if ffmpeg is available
     if _find_ffmpeg():

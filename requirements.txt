@@ -9,3 +9,4 @@ pytz==2024.1
 aiohttp==3.10.5
 aiofiles==24.1.0
 gtts>=2.5.0
+edge-tts>=6.1.9

@@ -34,55 +34,22 @@ logger = logging.getLogger(__name__)
 
 
 async def testvoice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    import io, os, httpx
+    import io
     from telegram import InputFile
-    from utils.groq_client import synthesize_speech, DEFAULT_ELEVENLABS_VOICE_ID, DEFAULT_ELEVENLABS_MODEL
+    from utils.groq_client import synthesize_speech
 
-    sample = "Verstappen takes pole. Ferrari are struggling on the mediums."
-
-    # Step 1: check env var visibility
-    api_key = os.getenv("ELEVENLABS_API_KEY")
-    voice_id = os.getenv("ELEVENLABS_VOICE_ID", DEFAULT_ELEVENLABS_VOICE_ID)
-    model_id = os.getenv("ELEVENLABS_MODEL", DEFAULT_ELEVENLABS_MODEL)
-    await update.message.reply_text(
-        f"ELEVENLABS_API_KEY present: {bool(api_key)} (len={len(api_key) if api_key else 0})\n"
-        f"voice_id: {voice_id}\nmodel_id: {model_id}"
-    )
-    if not api_key:
-        await update.message.reply_text("No API key — bot will use gTTS fallback.")
-        return
-
-    # Step 2: raw ElevenLabs request so we can see the exact status/error
+    await update.message.reply_text("Testing TTS pipeline...")
     try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            resp = await client.post(
-                f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}",
-                headers={"xi-api-key": api_key, "Content-Type": "application/json"},
-                json={"text": sample, "model_id": model_id,
-                      "voice_settings": {"stability": 0.6, "similarity_boost": 0.75,
-                                         "style": 0.0, "use_speaker_boost": True}},
-                params={"output_format": "mp3_44100_128"},
-            )
-        await update.message.reply_text(
-            f"ElevenLabs raw response: status={resp.status_code}\n"
-            f"body[:300]: {resp.text[:300] if resp.status_code != 200 else f'<audio {len(resp.content)} bytes>'}"
-        )
-    except Exception as e:
-        await update.message.reply_text(f"ElevenLabs request exception: {type(e).__name__}: {e}")
-        return
-
-    # Step 3: full pipeline
-    try:
-        audio, fmt = await synthesize_speech(sample)
+        audio, fmt = await synthesize_speech("Verstappen takes pole. Ferrari are struggling on the mediums.")
         buf = io.BytesIO(audio)
         if fmt == "ogg":
             await update.message.reply_voice(voice=InputFile(buf, filename="test.ogg"))
         else:
             await update.message.reply_audio(audio=InputFile(buf, filename="test.mp3"), title="BoxBox")
-        await update.message.reply_text(f"Audio sent as {fmt} ({len(audio)} bytes).")
+        await update.message.reply_text(f"OK — {fmt}, {len(audio)} bytes.")
     except Exception as e:
         import traceback
-        await update.message.reply_text(f"Pipeline FAILED: {type(e).__name__}: {e}\n\n{traceback.format_exc()[-500:]}")
+        await update.message.reply_text(f"FAILED: {type(e).__name__}: {e}\n\n{traceback.format_exc()[-500:]}")
 
 
 async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
