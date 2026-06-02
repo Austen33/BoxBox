@@ -35,9 +35,12 @@ def _strip_markdown(text: str) -> str:
     return _MARKDOWN_RE.sub("", text).strip()
 
 
+_FFMPEG = "/opt/homebrew/bin/ffmpeg"
+
+
 async def _convert_to_ogg_opus(audio_bytes: bytes, input_format: str = "wav") -> bytes:
     proc = await asyncio.create_subprocess_exec(
-        "ffmpeg", "-f", input_format, "-i", "pipe:0",
+        _FFMPEG, "-f", input_format, "-i", "pipe:0",
         "-c:a", "libopus", "-b:a", "64k", "-vbr", "on",
         "-f", "ogg", "pipe:1",
         "-loglevel", "error",
