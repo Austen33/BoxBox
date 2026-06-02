@@ -33,6 +33,23 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+async def testvoice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    import io
+    from telegram import InputFile
+    from utils.groq_client import synthesize_speech
+
+    await update.message.reply_text("Running TTS pipeline test...")
+    try:
+        audio = await synthesize_speech("Verstappen takes pole. Ferrari are struggling on the mediums.")
+        await update.message.reply_text(f"TTS OK: {len(audio)} bytes generated. Sending voice note...")
+        buf = io.BytesIO(audio)
+        await update.message.reply_voice(voice=InputFile(buf, filename="test.ogg"))
+        await update.message.reply_text("Voice note sent successfully!")
+    except Exception as e:
+        import traceback
+        await update.message.reply_text(f"FAILED at: {type(e).__name__}: {e}\n\n{traceback.format_exc()[-500:]}")
+
+
 async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     text = (
         "*BoxBox* — your F1 race engineer in a bot\n\n"
@@ -104,6 +121,7 @@ def main() -> None:
 
     application.add_handler(CommandHandler("start", start_handler))
     application.add_handler(CommandHandler("help", start_handler))
+    application.add_handler(CommandHandler("testvoice", testvoice_handler))
     application.add_handler(CommandHandler("race", race_handler))
     application.add_handler(CommandHandler("predict", predict_handler))
     application.add_handler(CommandHandler("strategy", strategy_handler))
