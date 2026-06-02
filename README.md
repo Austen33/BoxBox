@@ -95,6 +95,12 @@ TELEGRAM_TOKEN=your_telegram_bot_token
 GROQ_API_KEY=your_groq_api_key
 TAVILY_API_KEY=your_tavily_api_key
 TELEGRAM_CHAT_ID=your_personal_chat_id   # optional, only used for admin pings
+
+# Voice replies (optional). With ElevenLabs set, voice notes use a natural,
+# fluent voice; without it the bot falls back to Groq Orpheus, then gTTS.
+ELEVENLABS_API_KEY=your_elevenlabs_api_key
+ELEVENLABS_VOICE_ID=onwK4e9ZLuTAKqWW03F9   # optional; default is "Daniel" (calm, clear)
+ELEVENLABS_MODEL=eleven_multilingual_v2    # optional
 ```
 
 `.env` is already in [.gitignore](.gitignore) — never commit it.

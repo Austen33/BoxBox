@@ -3,6 +3,7 @@ import logging
 import os
 import re
 import shutil
+import httpx
 from groq import AsyncGroq
 
 logger = logging.getLogger(__name__)
@@ -26,11 +27,22 @@ def _get_client() -> AsyncGroq:
 FAST_MODEL = "llama-3.1-8b-instant"
 SMART_MODEL = "llama-3.3-70b-versatile"
 WHISPER_MODEL = "whisper-large-v3-turbo"
+
+# --- ElevenLabs (primary TTS) ---------------------------------------------
+# Natural, fluent voices. Requires ELEVENLABS_API_KEY. Default voice is
+# "Daniel" — a calm, clear British presenter tone that suits a race engineer.
+# Browse/override voices at https://elevenlabs.io/app/voice-library.
+ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
+ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID", "onwK4e9ZLuTAKqWW03F9")  # Daniel
+ELEVENLABS_MODEL = os.getenv("ELEVENLABS_MODEL", "eleven_multilingual_v2")
+
+# --- Groq Orpheus (fallback TTS) ------------------------------------------
 TTS_MODEL = "canopylabs/orpheus-v1-english"
 # Orpheus voices: tara, leah, jess, leo, dan, mia, zac, zoe. Override via env to taste.
 TTS_VOICE = os.getenv("TTS_VOICE", "tara")
 # Playback tempo multiplier applied in ffmpeg (pitch preserved). >1.0 speeds up the
-# slow, deliberate Orpheus cadence to sound more fluent. Sensible range ~0.9–1.4.
+# slow, deliberate Orpheus cadence to sound more fluent. ElevenLabs is naturally
+# paced, so this is only applied to the Orpheus/gTTS fallbacks. Range ~0.9–1.4.
 try:
     TTS_SPEED = float(os.getenv("TTS_SPEED", "1.18"))
 except ValueError:
@@ -61,13 +73,15 @@ def _find_ffmpeg() -> str | None:
     return None
 
 
-async def _convert_to_ogg_opus(audio_bytes: bytes, input_format: str = "wav") -> bytes:
+async def _convert_to_ogg_opus(
+    audio_bytes: bytes, input_format: str = "wav", speed: float = TTS_SPEED
+) -> bytes:
     ffmpeg = _find_ffmpeg()
     if not ffmpeg:
         raise FileNotFoundError("ffmpeg not found")
     args = [ffmpeg, "-f", input_format, "-i", "pipe:0"]
-    if abs(TTS_SPEED - 1.0) > 0.01:
-        args += ["-filter:a", f"atempo={TTS_SPEED:.3f}"]
+    if abs(speed - 1.0) > 0.01:
+        args += ["-filter:a", f"atempo={speed:.3f}"]
     args += [
         "-c:a", "libopus", "-b:a", "64k", "-vbr", "on",
         "-f", "ogg", "pipe:1",
@@ -83,6 +97,50 @@ async def _convert_to_ogg_opus(audio_bytes: bytes, input_format: str = "wav") ->
     if proc.returncode != 0:
         raise RuntimeError(f"ffmpeg conversion failed: {stderr.decode()}")
     return stdout
+
+
+async def _elevenlabs_mp3(text: str) -> bytes | None:
+    """Synthesize speech with ElevenLabs. Returns MP3 bytes, or None if unavailable.
+
+    Tuned for a calm, clear delivery: higher stability keeps the voice steady
+    rather than dramatic, and speaker boost improves clarity.
+    """
+    if not ELEVENLABS_API_KEY:
+        return None
+
+    text = _strip_emotion_tags(text)
+    url = f"https://api.elevenlabs.io/v1/text-to-speech/{ELEVENLABS_VOICE_ID}"
+    headers = {
+        "xi-api-key": ELEVENLABS_API_KEY,
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "text": text,
+        "model_id": ELEVENLABS_MODEL,
+        "voice_settings": {
+            "stability": 0.6,
+            "similarity_boost": 0.75,
+            "style": 0.0,
+            "use_speaker_boost": True,
+        },
+    }
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.post(
+                url,
+                headers=headers,
+                json=payload,
+                params={"output_format": "mp3_44100_128"},
+            )
+        if resp.status_code != 200:
+            logger.warning(
+                "ElevenLabs TTS returned %s: %s", resp.status_code, resp.text[:300]
+            )
+            return None
+        return resp.content or None
+    except Exception:
+        logger.warning("ElevenLabs TTS request failed", exc_info=True)
+        return None
 
 
 async def _gtts_mp3(text: str) -> bytes:
@@ -102,28 +160,43 @@ async def _gtts_mp3(text: str) -> bytes:
 
 
 async def synthesize_speech(text: str) -> tuple[bytes, str]:
-    """Returns (audio_bytes, fmt) where fmt is 'ogg' or 'mp3'."""
+    """Returns (audio_bytes, fmt) where fmt is 'ogg' or 'mp3'.
+
+    Engine priority: ElevenLabs (natural, fluent) -> Groq Orpheus -> gTTS.
+    """
     cleaned = _strip_markdown(text)
     if len(cleaned) > 4096:
         cleaned = cleaned[:4096]
 
-    # Try Groq TTS first (requires Orpheus terms acceptance)
-    groq_wav: bytes | None = None
-    try:
-        response = await _get_client().audio.speech.create(
-            model=TTS_MODEL,
-            voice=TTS_VOICE,
-            input=cleaned,
-            response_format="wav",
-        )
-        wav = await response.read()
-        if wav:
-            groq_wav = wav
-    except Exception:
-        logger.warning("Groq TTS unavailable, using gTTS fallback", exc_info=True)
-
-    source_bytes = groq_wav
+    source_bytes: bytes | None = None
     source_fmt = "wav"
+    # ElevenLabs is naturally paced; the atempo speed-up only helps the slower
+    # Orpheus/gTTS fallbacks, so track whether to apply it.
+    convert_speed = TTS_SPEED
+
+    # 1. ElevenLabs (preferred) -> MP3
+    el_mp3 = await _elevenlabs_mp3(cleaned)
+    if el_mp3:
+        source_bytes = el_mp3
+        source_fmt = "mp3"
+        convert_speed = 1.0
+    else:
+        # 2. Groq Orpheus -> WAV
+        try:
+            response = await _get_client().audio.speech.create(
+                model=TTS_MODEL,
+                voice=TTS_VOICE,
+                input=cleaned,
+                response_format="wav",
+            )
+            wav = await response.read()
+            if wav:
+                source_bytes = wav
+                source_fmt = "wav"
+        except Exception:
+            logger.warning("Groq TTS unavailable, using gTTS fallback", exc_info=True)
+
+    # 3. gTTS (last resort) -> MP3
     if source_bytes is None:
         source_bytes = await _gtts_mp3(cleaned)
         source_fmt = "mp3"
@@ -131,7 +204,9 @@ async def synthesize_speech(text: str) -> tuple[bytes, str]:
     # Convert to OGG/Opus if ffmpeg is available
     if _find_ffmpeg():
         try:
-            ogg = await _convert_to_ogg_opus(source_bytes, input_format=source_fmt)
+            ogg = await _convert_to_ogg_opus(
+                source_bytes, input_format=source_fmt, speed=convert_speed
+            )
             return ogg, "ogg"
         except Exception:
             logger.warning("OGG/Opus conversion failed", exc_info=True)
@@ -139,7 +214,7 @@ async def synthesize_speech(text: str) -> tuple[bytes, str]:
     # ffmpeg not available — return MP3 directly (caller uses reply_audio)
     if source_fmt == "mp3":
         return source_bytes, "mp3"
-    # Had WAV from Groq but no ffmpeg — fall back to gTTS MP3
+    # Had WAV but no ffmpeg — fall back to gTTS MP3
     mp3 = await _gtts_mp3(cleaned)
     return mp3, "mp3"
 
