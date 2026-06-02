@@ -82,8 +82,14 @@ async def get_f1_response(query: str, for_voice: bool = False) -> str:
 
     if for_voice:
         formatting_instruction = (
-            "\nKeep the response concise and conversational — it will be spoken aloud as a voice note. "
-            "No bullet points, no markdown, no formatting symbols."
+            "\nThis reply will be spoken aloud as a voice note, so write it exactly how a person talks, "
+            "not how they write. Use short sentences, contractions, and a relaxed, natural rhythm with commas "
+            "for breathing room. No bullet points, no markdown, no formatting symbols, no numbered lists. "
+            "Say things the way you'd say them out loud: 'Formula One' not 'F1', 'first' or 'took the win' "
+            "not 'P1', spell out numbers naturally. "
+            "Where it genuinely fits the tone, you may include at most one or two emotion cues in angle brackets "
+            "that the voice engine performs, chosen only from this exact set: <laugh> <chuckle> <sigh>. "
+            "Use them sparingly and only when they match the moment — never force them."
         )
     else:
         formatting_instruction = (

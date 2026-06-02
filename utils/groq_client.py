@@ -27,13 +27,21 @@ FAST_MODEL = "llama-3.1-8b-instant"
 SMART_MODEL = "llama-3.3-70b-versatile"
 WHISPER_MODEL = "whisper-large-v3-turbo"
 TTS_MODEL = "canopylabs/orpheus-v1-english"
-TTS_VOICE = "tara"
+# Orpheus voices: tara, leah, jess, leo, dan, mia, zac, zoe. Override via env to taste.
+TTS_VOICE = os.getenv("TTS_VOICE", "tara")
 
 _MARKDOWN_RE = re.compile(r"[*_`\[\]\\]")
+# Orpheus paralinguistic cues (e.g. <laugh>, <sigh>). Orpheus performs these;
+# other engines would read them literally, so strip them on the fallback path.
+_EMOTION_TAG_RE = re.compile(r"<(?:laugh|chuckle|sigh|gasp|groan|yawn|cough|sniffle|sneeze)>", re.IGNORECASE)
 
 
 def _strip_markdown(text: str) -> str:
     return _MARKDOWN_RE.sub("", text).strip()
+
+
+def _strip_emotion_tags(text: str) -> str:
+    return _EMOTION_TAG_RE.sub("", text).strip()
 
 
 def _find_ffmpeg() -> str | None:
@@ -68,6 +76,8 @@ async def _convert_to_ogg_opus(audio_bytes: bytes, input_format: str = "wav") ->
 async def _gtts_mp3(text: str) -> bytes:
     from gtts import gTTS
     import io as _io
+
+    text = _strip_emotion_tags(text)
 
     def _run() -> bytes:
         tts = gTTS(text[:4096], lang="en")
