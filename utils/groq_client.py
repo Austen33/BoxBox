@@ -39,9 +39,10 @@ async def synthesize_speech(text: str) -> bytes:
         model=TTS_MODEL,
         voice=TTS_VOICE,
         input=cleaned,
-        response_format="opus",
+        response_format="ogg",
+        extra_headers={"Accept": "audio/ogg"},
     )
-    return response.content
+    return await response.read()
 
 SYSTEM_PROMPT = """You are BoxBox, a Telegram F1 bot. You are a knowledgeable mate who follows F1 obsessively.
 
