@@ -39,22 +39,30 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
         await update.message.reply_chat_action("record_voice")
 
-        tts_bytes = None
+        tts_bytes: bytes | None = None
+        tts_fmt = "ogg"
         try:
-            tts_bytes = await synthesize_speech(response)
+            tts_bytes, tts_fmt = await synthesize_speech(response)
         except Exception:
             logger.exception("TTS synthesis failed — falling back to text")
 
         if tts_bytes:
             try:
-                voice_buf = io.BytesIO(tts_bytes)
-                await update.message.reply_voice(
-                    voice=InputFile(voice_buf, filename="response.ogg"),
-                    caption=f'"{transcript}"',
-                )
+                buf = io.BytesIO(tts_bytes)
+                if tts_fmt == "ogg":
+                    await update.message.reply_voice(
+                        voice=InputFile(buf, filename="response.ogg"),
+                        caption=f'"{transcript}"',
+                    )
+                else:
+                    await update.message.reply_audio(
+                        audio=InputFile(buf, filename="response.mp3"),
+                        title="BoxBox",
+                        caption=f'"{transcript}"',
+                    )
                 return
             except Exception:
-                logger.exception("reply_voice failed — falling back to text")
+                logger.exception("Telegram audio send failed — falling back to text")
 
         full_reply = f'_You said: "{transcript}"_\n\n{response}'
         await safe_reply(update.message, full_reply)

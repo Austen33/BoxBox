@@ -40,11 +40,14 @@ async def testvoice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     await update.message.reply_text("Running TTS pipeline test...")
     try:
-        audio = await synthesize_speech("Verstappen takes pole. Ferrari are struggling on the mediums.")
-        await update.message.reply_text(f"TTS OK: {len(audio)} bytes generated. Sending voice note...")
+        audio, fmt = await synthesize_speech("Verstappen takes pole. Ferrari are struggling on the mediums.")
+        await update.message.reply_text(f"TTS OK: {len(audio)} bytes, format={fmt}. Sending...")
         buf = io.BytesIO(audio)
-        await update.message.reply_voice(voice=InputFile(buf, filename="test.ogg"))
-        await update.message.reply_text("Voice note sent successfully!")
+        if fmt == "ogg":
+            await update.message.reply_voice(voice=InputFile(buf, filename="test.ogg"))
+        else:
+            await update.message.reply_audio(audio=InputFile(buf, filename="test.mp3"), title="BoxBox")
+        await update.message.reply_text(f"Audio sent as {fmt}!")
     except Exception as e:
         import traceback
         await update.message.reply_text(f"FAILED at: {type(e).__name__}: {e}\n\n{traceback.format_exc()[-500:]}")
