@@ -25,8 +25,8 @@ def _get_client() -> AsyncGroq:
 FAST_MODEL = "llama-3.1-8b-instant"
 SMART_MODEL = "llama-3.3-70b-versatile"
 WHISPER_MODEL = "whisper-large-v3-turbo"
-TTS_MODEL = "playai-tts"
-TTS_VOICE = "Fritz-PlayAI"
+TTS_MODEL = "canopylabs/orpheus-v1-english"
+TTS_VOICE = "tara"
 
 _MARKDOWN_RE = re.compile(r"[*_`\[\]\\]")
 
@@ -35,9 +35,9 @@ def _strip_markdown(text: str) -> str:
     return _MARKDOWN_RE.sub("", text).strip()
 
 
-async def _convert_to_ogg_opus(audio_bytes: bytes) -> bytes:
+async def _convert_to_ogg_opus(audio_bytes: bytes, input_format: str = "wav") -> bytes:
     proc = await asyncio.create_subprocess_exec(
-        "ffmpeg", "-i", "pipe:0",
+        "ffmpeg", "-f", input_format, "-i", "pipe:0",
         "-c:a", "libopus", "-b:a", "64k", "-vbr", "on",
         "-f", "ogg", "pipe:1",
         "-loglevel", "error",
@@ -51,23 +51,41 @@ async def _convert_to_ogg_opus(audio_bytes: bytes) -> bytes:
     return stdout
 
 
+async def _synthesize_gtts_fallback(text: str) -> bytes:
+    from gtts import gTTS
+    import io as _io
+
+    def _run() -> bytes:
+        tts = gTTS(text[:4096], lang="en")
+        buf = _io.BytesIO()
+        tts.write_to_fp(buf)
+        return buf.getvalue()
+
+    loop = asyncio.get_event_loop()
+    mp3_bytes = await loop.run_in_executor(None, _run)
+    return await _convert_to_ogg_opus(mp3_bytes, input_format="mp3")
+
+
 async def synthesize_speech(text: str) -> bytes:
     cleaned = _strip_markdown(text)
     if len(cleaned) > 4096:
         cleaned = cleaned[:4096]
-    response = await _get_client().audio.speech.create(
-        model=TTS_MODEL,
-        voice=TTS_VOICE,
-        input=cleaned,
-        response_format="wav",
-    )
-    wav_bytes = await response.read()
-    if not wav_bytes:
-        raise RuntimeError("Groq TTS returned empty audio")
-    logger.debug("TTS returned %d bytes (WAV), converting to OGG/Opus", len(wav_bytes))
-    ogg_bytes = await _convert_to_ogg_opus(wav_bytes)
-    logger.debug("Converted to %d bytes (OGG/Opus)", len(ogg_bytes))
-    return ogg_bytes
+
+    try:
+        response = await _get_client().audio.speech.create(
+            model=TTS_MODEL,
+            voice=TTS_VOICE,
+            input=cleaned,
+            response_format="wav",
+        )
+        wav_bytes = await response.read()
+        if not wav_bytes:
+            raise RuntimeError("Groq TTS returned empty audio")
+        logger.debug("Groq TTS returned %d bytes (WAV), converting", len(wav_bytes))
+        return await _convert_to_ogg_opus(wav_bytes, input_format="wav")
+    except Exception:
+        logger.warning("Groq TTS unavailable, falling back to gTTS", exc_info=True)
+        return await _synthesize_gtts_fallback(cleaned)
 
 SYSTEM_PROMPT = """You are BoxBox, a Telegram F1 bot. You are a knowledgeable mate who follows F1 obsessively.
 
