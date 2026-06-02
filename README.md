@@ -23,6 +23,7 @@ BoxBox combines live timing data from [FastF1](https://github.com/theOehrly/Fast
 | `/history [driver] [circuit]` | A driver's past results at a given track |
 | `/career [driver]` | Complete career statistics for a driver |
 | `/rewind [circuit] [year]` | Relive the key moments and turning points of any past race |
+| `/result` | Latest race result — finishing order with gap times and concise DNF reasons |
 | `/notify` | Toggle session reminders and breaking-news alerts |
 | Voice note | Send a voice message — it's transcribed with Whisper and answered like `/ask` |
 
@@ -47,12 +48,14 @@ handlers/
   history.py              /history, /career — historical driver data
   rewind.py               /rewind — narrative replay of a past race
   notify.py               /notify subscriptions, session reminders, breaking-news poller
+  result.py               /result — latest race finishing order + DNF reasons via Tavily
   voice.py                Voice-message ingest → Whisper → /ask flow
 utils/
   f1_data.py              FastF1 wrappers, schedule helpers, Irish-time formatting
-  groq_client.py          Groq Chat + Whisper client, system prompt, token trimming
+  groq_client.py          Groq Chat + Whisper client, TTS (edge-tts → gTTS fallback), token trimming
   tavily_client.py        Tavily search wrapper + result formatter
   rate_limit.py           Per-user rate limiter
+  telegram_safe.py        Safe reply helper (splits long messages for Telegram's 4096-char limit)
 ```
 
 The bot runs as a single long-lived polling process. APScheduler handles the reminder and news-watcher jobs in the same event loop.
@@ -96,11 +99,9 @@ GROQ_API_KEY=your_groq_api_key
 TAVILY_API_KEY=your_tavily_api_key
 TELEGRAM_CHAT_ID=your_personal_chat_id   # optional, only used for admin pings
 
-# Voice replies (optional). With ElevenLabs set, voice notes use a natural,
-# fluent voice; without it the bot falls back to Groq Orpheus, then gTTS.
-ELEVENLABS_API_KEY=your_elevenlabs_api_key
-ELEVENLABS_VOICE_ID=onwK4e9ZLuTAKqWW03F9   # optional; default is "Daniel" (calm, clear)
-ELEVENLABS_MODEL=eleven_multilingual_v2    # optional
+# Voice replies — edge-tts is used by default (no API key required).
+EDGE_TTS_VOICE=en-GB-RyanNeural   # optional; run `edge-tts --list-voices` for options
+TTS_SPEED=1.18                    # optional; atempo speed multiplier for the gTTS fallback (0.5–2.0)
 ```
 
 `.env` is already in [.gitignore](.gitignore) — never commit it.
