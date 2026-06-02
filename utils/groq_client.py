@@ -29,6 +29,13 @@ WHISPER_MODEL = "whisper-large-v3-turbo"
 TTS_MODEL = "canopylabs/orpheus-v1-english"
 # Orpheus voices: tara, leah, jess, leo, dan, mia, zac, zoe. Override via env to taste.
 TTS_VOICE = os.getenv("TTS_VOICE", "tara")
+# Playback tempo multiplier applied in ffmpeg (pitch preserved). >1.0 speeds up the
+# slow, deliberate Orpheus cadence to sound more fluent. Sensible range ~0.9–1.4.
+try:
+    TTS_SPEED = float(os.getenv("TTS_SPEED", "1.18"))
+except ValueError:
+    TTS_SPEED = 1.18
+TTS_SPEED = max(0.5, min(TTS_SPEED, 2.0))  # atempo single-stage limits
 
 _MARKDOWN_RE = re.compile(r"[*_`\[\]\\]")
 # Orpheus paralinguistic cues (e.g. <laugh>, <sigh>). Orpheus performs these;
@@ -58,11 +65,16 @@ async def _convert_to_ogg_opus(audio_bytes: bytes, input_format: str = "wav") ->
     ffmpeg = _find_ffmpeg()
     if not ffmpeg:
         raise FileNotFoundError("ffmpeg not found")
-    proc = await asyncio.create_subprocess_exec(
-        ffmpeg, "-f", input_format, "-i", "pipe:0",
+    args = [ffmpeg, "-f", input_format, "-i", "pipe:0"]
+    if abs(TTS_SPEED - 1.0) > 0.01:
+        args += ["-filter:a", f"atempo={TTS_SPEED:.3f}"]
+    args += [
         "-c:a", "libopus", "-b:a", "64k", "-vbr", "on",
         "-f", "ogg", "pipe:1",
         "-loglevel", "error",
+    ]
+    proc = await asyncio.create_subprocess_exec(
+        *args,
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
