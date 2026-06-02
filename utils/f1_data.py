@@ -484,6 +484,43 @@ def get_race_rewind_data(year: int, round_number: int) -> dict | None:
         return {"error": str(e)}
 
 
+async def get_last_race_results_async(year: int = None) -> dict | None:
+    if year is None:
+        year = get_current_season()
+    url = f"{JOLPI_BASE}/{year}/last/results.json"
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                if resp.status != 200:
+                    return {"error": f"API returned {resp.status}"}
+                data = await resp.json()
+
+        races = data["MRData"]["RaceTable"]["Races"]
+        if not races:
+            return {"error": "No race results available"}
+
+        race = races[0]
+        results = []
+        for r in race.get("Results", [])[:10]:
+            driver = r.get("Driver", {})
+            constructor = r.get("Constructor", {})
+            results.append({
+                "position": int(r.get("position", 0)),
+                "driver": f"{driver.get('givenName', '')} {driver.get('familyName', '')}".strip(),
+                "team": constructor.get("name", "Unknown"),
+                "abbreviation": driver.get("code", ""),
+            })
+
+        return {
+            "name": race.get("raceName", "Unknown"),
+            "year": int(race.get("season", year)),
+            "round": int(race.get("round", 0)),
+            "results": results,
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
 async def get_driver_standings(year: int = None) -> dict | None:
     if year is None:
         year = get_current_season()

@@ -3,7 +3,7 @@ from telegram import Update
 from telegram.ext import ContextTypes
 from utils.groq_client import chat, SMART_MODEL
 from utils.tavily_client import search, format_search_results
-from utils.f1_data import get_last_race_results, get_driver_standings, get_constructor_standings
+from utils.f1_data import get_last_race_results_async, get_driver_standings, get_constructor_standings
 from utils.rate_limit import is_rate_limited
 from utils.telegram_safe import safe_reply
 
@@ -39,12 +39,12 @@ async def get_f1_response(query: str, for_voice: bool = False) -> str:
             driver_data, constructor_data, race_data = await asyncio.gather(
                 get_driver_standings(),
                 get_constructor_standings(),
-                asyncio.to_thread(get_last_race_results),
+                get_last_race_results_async(),
             )
         else:
             driver_data, race_data = await asyncio.gather(
                 get_driver_standings(),
-                asyncio.to_thread(get_last_race_results),
+                get_last_race_results_async(),
             )
             constructor_data = None
 
