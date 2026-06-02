@@ -1,6 +1,10 @@
+import asyncio
+import logging
 import os
 import re
 from groq import AsyncGroq
+
+logger = logging.getLogger(__name__)
 
 _client: AsyncGroq | None = None
 
@@ -31,6 +35,22 @@ def _strip_markdown(text: str) -> str:
     return _MARKDOWN_RE.sub("", text).strip()
 
 
+async def _convert_to_ogg_opus(audio_bytes: bytes) -> bytes:
+    proc = await asyncio.create_subprocess_exec(
+        "ffmpeg", "-i", "pipe:0",
+        "-c:a", "libopus", "-b:a", "64k", "-vbr", "on",
+        "-f", "ogg", "pipe:1",
+        "-loglevel", "error",
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await proc.communicate(input=audio_bytes)
+    if proc.returncode != 0:
+        raise RuntimeError(f"ffmpeg OGG/Opus conversion failed: {stderr.decode()}")
+    return stdout
+
+
 async def synthesize_speech(text: str) -> bytes:
     cleaned = _strip_markdown(text)
     if len(cleaned) > 4096:
@@ -39,10 +59,15 @@ async def synthesize_speech(text: str) -> bytes:
         model=TTS_MODEL,
         voice=TTS_VOICE,
         input=cleaned,
-        response_format="ogg",
-        extra_headers={"Accept": "audio/ogg"},
+        response_format="wav",
     )
-    return await response.read()
+    wav_bytes = await response.read()
+    if not wav_bytes:
+        raise RuntimeError("Groq TTS returned empty audio")
+    logger.debug("TTS returned %d bytes (WAV), converting to OGG/Opus", len(wav_bytes))
+    ogg_bytes = await _convert_to_ogg_opus(wav_bytes)
+    logger.debug("Converted to %d bytes (OGG/Opus)", len(ogg_bytes))
+    return ogg_bytes
 
 SYSTEM_PROMPT = """You are BoxBox, a Telegram F1 bot. You are a knowledgeable mate who follows F1 obsessively.
 
