@@ -16,6 +16,7 @@ from utils.tavily_client import search
 from utils.groq_client import chat, FAST_MODEL
 from utils.telegram_safe import safe_send
 from utils import store
+from handlers.follow import match_follows
 
 logger = logging.getLogger(__name__)
 
@@ -206,9 +207,15 @@ News:
 
         summary = await chat(messages=[{"role": "user", "content": prompt}], model=FAST_MODEL)
 
-        # Send to all subscribers
-        message = f"🚨 *Breaking F1 News*\n\n{summary}"
+        # Send to all subscribers, flagging items that mention a followed
+        # driver/team so /follow users see why it's relevant to them.
+        base_message = f"🚨 *Breaking F1 News*\n\n{summary}"
+        combined_text = " ".join(f"{i['title']} {i['content']}" for i in breaking_items)
         for chat_id in list(_subscribers):
+            message = base_message
+            hits = match_follows(chat_id, combined_text)
+            if hits:
+                message = f"⭐ Mentions {', '.join(hits)} you follow\n\n{base_message}"
             await safe_send(application.bot, chat_id, message)
 
         logger.info(f"Pushed {len(breaking_items)} breaking news items to {len(_subscribers)} subscribers")

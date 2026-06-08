@@ -25,6 +25,8 @@ from handlers.notify import notify_handler, setup_scheduler
 from handlers.history import history_handler, career_handler
 from handlers.rewind import rewind_handler
 from handlers.result import result_handler
+from handlers.profile import driver_handler, team_handler
+from handlers.follow import follow_handler, unfollow_handler
 from handlers.menu import menu_callback_handler
 from utils.telegram_safe import safe_reply
 from utils.metrics import track
@@ -76,8 +78,11 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         "/h2h \\[driver1\\] \\[driver2\\] — head-to-head this season (e.g. /h2h VER NOR)\n"
         "/history \\[driver\\] \\[circuit\\] — driver's past results at a track\n"
         "/career \\[driver\\] — complete career statistics\n"
+        "/driver \\[name\\] — driver profile card: season form and career stats\n"
+        "/team \\[name\\] — team profile card: season standing and line-up\n"
         "/rewind \\[circuit\\] \\[year\\] — relive key moments from any past race\n"
         "/result — latest race result with concise DNF reasons\n"
+        "/follow \\[driver/team\\] — flag their breaking news (also /unfollow)\n"
         "/notify — toggle session reminders and breaking news alerts\n"
         "\n"
         "You can also send a *voice note* and I'll transcribe it and answer like an /ask query.\n\n"
@@ -131,6 +136,10 @@ async def post_init(application: Application) -> None:
         BotCommand("h2h", "Head-to-head stats for two drivers"),
         BotCommand("history", "Driver's past results at a circuit"),
         BotCommand("career", "Complete driver career statistics"),
+        BotCommand("driver", "Driver profile card: season + career stats"),
+        BotCommand("team", "Team profile card: season standing and line-up"),
+        BotCommand("follow", "Follow a driver or team for flagged news"),
+        BotCommand("unfollow", "Stop following a driver or team"),
         BotCommand("notify", "Toggle session reminders and breaking news"),
         BotCommand("rewind", "Relive key moments from a past race"),
         BotCommand("result", "Latest race result with DNF reasons"),
@@ -177,6 +186,10 @@ def main() -> None:
         "notify": notify_handler,
         "rewind": rewind_handler,
         "result": result_handler,
+        "driver": driver_handler,
+        "team": team_handler,
+        "follow": follow_handler,
+        "unfollow": unfollow_handler,
     }
     for name, handler in commands.items():
         application.add_handler(CommandHandler(name, track(name)(handler)))

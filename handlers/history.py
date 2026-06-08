@@ -72,17 +72,19 @@ async def _fetch_driver_id_by_name(name: str) -> str | None:
             return None
 
         drivers = data["MRData"]["DriverTable"]["Drivers"]
-        name_lower = name.lower()
+        name_lower = name.lower().strip()
 
+        # Exact matches (3-letter code or surname) take priority across all
+        # drivers, so a query like "VER" can't be stolen by a substring hit in
+        # another driver's given name (e.g. "ver" in "Oliver" Bearman).
         for d in drivers:
-            # Check code, given name, family name
-            if d.get("code", "").lower() == name_lower:
+            if d.get("code", "").lower() == name_lower or d.get("familyName", "").lower() == name_lower:
                 return d.get("driverId")
-            if d.get("familyName", "").lower() == name_lower:
-                return d.get("driverId")
-            if name_lower in d.get("givenName", "").lower():
-                return d.get("driverId")
-            if name_lower in f"{d.get('givenName', '')} {d.get('familyName', '')}".lower():
+
+        # Then fall back to a fuzzy full-name contains match.
+        for d in drivers:
+            full = f"{d.get('givenName', '')} {d.get('familyName', '')}".lower()
+            if name_lower in full:
                 return d.get("driverId")
 
         # If not found in current drivers, try direct lookup

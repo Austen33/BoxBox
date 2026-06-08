@@ -22,8 +22,11 @@ BoxBox combines live timing data from [FastF1](https://github.com/theOehrly/Fast
 | `/h2h [driver1] [driver2]` | Head-to-head stats for the current season (qualifying, races, points) |
 | `/history [driver] [circuit]` | A driver's past results at a given track |
 | `/career [driver]` | Complete career statistics for a driver |
+| `/driver [name]` | Driver profile card — season standing plus career stats and a scouting note |
+| `/team [name]` | Constructor profile card — season standing and current race line-up |
 | `/rewind [circuit] [year]` | Relive the key moments and turning points of any past race |
 | `/result` | Latest race result — finishing order with gap times and concise DNF reasons |
+| `/follow [driver/team]` | Follow a driver or team so their breaking news is flagged for you (`/unfollow` to stop) |
 | `/notify` | Toggle session reminders and breaking-news alerts |
 | Voice note | Send a voice message — it's transcribed with Whisper and answered like `/ask` |
 
@@ -46,9 +49,12 @@ handlers/
   lap.py                  /lap — fastest lap + sector breakdown
   h2h.py                  /h2h — head-to-head season comparison
   history.py              /history, /career — historical driver data
+  profile.py              /driver, /team — profile cards over standings + Ergast data
+  follow.py               /follow, /unfollow — per-chat favourites, persisted; flags news
   rewind.py               /rewind — narrative replay of a past race
   notify.py               /notify subscriptions, session reminders, breaking-news poller
   result.py               /result — latest race finishing order + DNF reasons via Tavily
+  menu.py                 CallbackQuery router for the /race inline-button hub
   voice.py                Voice-message ingest → Whisper → /ask flow
 utils/
   f1_data.py              FastF1 wrappers, schedule helpers, Irish-time formatting
