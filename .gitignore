@@ -1,1 +1,15 @@
+# Secrets / local config
 .env
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# FastF1 on-disk cache
+fastf1_cache/
+
+# Persisted bot state (subscribers, seen-news, etc.)
+data/
+*.sqlite
+*.sqlite3

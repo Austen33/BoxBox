@@ -8,17 +8,17 @@ from utils.rate_limit import is_rate_limited
 from utils.telegram_safe import safe_reply
 
 
-async def predict_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    user_id = update.effective_user.id
+async def run_predict(message, user_id: int) -> None:
+    """Core /predict logic, reusable by the command and the race-weekend hub."""
     if is_rate_limited(user_id):
-        await update.message.reply_text("Slow down — one question at a time.")
+        await message.reply_text("Slow down — one question at a time.")
         return
 
-    await update.message.reply_chat_action("typing")
+    await message.reply_chat_action("typing")
 
     qual_data, next_race = await asyncio.gather(
         asyncio.to_thread(get_qualifying_results),
-        asyncio.to_thread(get_next_race_info),
+        get_next_race_info(),
     )
 
     race_name = "the upcoming race"
@@ -64,4 +64,8 @@ Be honest if it's hard to call."""
         model=SMART_MODEL,
     )
 
-    await safe_reply(update.message, response)
+    await safe_reply(message, response)
+
+
+async def predict_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await run_predict(update.message, update.effective_user.id)

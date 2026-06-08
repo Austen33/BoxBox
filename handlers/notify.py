@@ -14,6 +14,8 @@ from utils.f1_data import get_event_schedule, IRISH_TZ, UTC_TZ
 from utils.rate_limit import is_rate_limited
 from utils.tavily_client import search
 from utils.groq_client import chat, FAST_MODEL
+from utils.telegram_safe import safe_send
+from utils import store
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +24,33 @@ _scheduler: AsyncIOScheduler | None = None
 # Use OrderedDict as a bounded FIFO cache of seen-news hashes.
 _MAX_SEEN_HASHES = 500
 _seen_news_hashes: "OrderedDict[str, None]" = OrderedDict()
+
+# Persistence keys for utils.store (survives restarts).
+_SUBSCRIBERS_KEY = "notify_subscribers"
+_SEEN_NEWS_KEY = "notify_seen_news"
+
+
+def _load_state() -> None:
+    """Rehydrate subscribers and seen-news hashes from the persistent store."""
+    global _subscribers, _seen_news_hashes
+    subs = store.load(_SUBSCRIBERS_KEY, [])
+    if isinstance(subs, list):
+        _subscribers = {int(s) for s in subs}
+    seen = store.load(_SEEN_NEWS_KEY, [])
+    if isinstance(seen, list):
+        _seen_news_hashes = OrderedDict((h, None) for h in seen[-_MAX_SEEN_HASHES:])
+    logger.info(
+        "Loaded %d subscriber(s) and %d seen-news hash(es) from store.",
+        len(_subscribers), len(_seen_news_hashes),
+    )
+
+
+def _persist_subscribers() -> None:
+    store.save(_SUBSCRIBERS_KEY, sorted(_subscribers))
+
+
+def _persist_seen_news() -> None:
+    store.save(_SEEN_NEWS_KEY, list(_seen_news_hashes.keys()))
 
 # Keywords that indicate breaking/important news. Matched as whole words.
 BREAKING_KEYWORDS = [
@@ -37,19 +66,9 @@ _BREAKING_RE = re.compile(
     re.IGNORECASE,
 )
 
-NEWS_SOURCES = [
-    "formula1.com",
-    "autosport.com",
-    "motorsport.com",
-    "the-race.com",
-    "gpfans.com",
-    "planetf1.com",
-    "f1i.com",
-]
-
-
 def setup_scheduler(application: Application) -> None:
     global _scheduler
+    _load_state()
     _scheduler = AsyncIOScheduler(timezone=pytz.utc)
     try:
         _schedule_all_reminders(application)
@@ -109,12 +128,7 @@ def _schedule_all_reminders(application: Application) -> None:
 
 async def _send_reminder(application: Application, message: str) -> None:
     for chat_id in list(_subscribers):
-        try:
-            await application.bot.send_message(
-                chat_id=chat_id, text=message, parse_mode="Markdown"
-            )
-        except Exception as e:
-            logger.warning(f"Failed to send reminder to {chat_id}: {e}")
+        await safe_send(application.bot, chat_id, message)
 
 
 def _hash_news(title: str, url: str) -> str:
@@ -136,6 +150,7 @@ def _mark_seen(news_hash: str) -> None:
     _seen_news_hashes[news_hash] = None
     while len(_seen_news_hashes) > _MAX_SEEN_HASHES:
         _seen_news_hashes.popitem(last=False)
+    _persist_seen_news()
 
 
 async def _check_breaking_news(application: Application) -> None:
@@ -194,17 +209,29 @@ News:
         # Send to all subscribers
         message = f"🚨 *Breaking F1 News*\n\n{summary}"
         for chat_id in list(_subscribers):
-            try:
-                await application.bot.send_message(
-                    chat_id=chat_id, text=message, parse_mode="Markdown"
-                )
-            except Exception as e:
-                logger.warning(f"Failed to send news to {chat_id}: {e}")
+            await safe_send(application.bot, chat_id, message)
 
         logger.info(f"Pushed {len(breaking_items)} breaking news items to {len(_subscribers)} subscribers")
 
     except Exception as e:
         logger.error(f"Error checking breaking news: {e}")
+
+
+async def subscribe_core(message, chat_id: int) -> None:
+    """Add-only subscribe used by the race-weekend hub button. Idempotent."""
+    if chat_id in _subscribers:
+        await message.reply_text(
+            "Reminders are already on. Use /notify to turn them off."
+        )
+        return
+    _subscribers.add(chat_id)
+    _persist_subscribers()
+    await message.reply_text(
+        "Reminders on. You'll get:\n"
+        "• 30-min alerts before each session\n"
+        "• Breaking F1 news as it happens\n\n"
+        "Use /notify again to turn them off."
+    )
 
 
 async def notify_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -216,12 +243,14 @@ async def notify_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     chat_id = update.effective_chat.id
     if chat_id in _subscribers:
         _subscribers.discard(chat_id)
+        _persist_subscribers()
         await update.message.reply_text(
             "Reminders off. You won't get session alerts or breaking news anymore.\n"
             "Use /notify again to turn them back on."
         )
     else:
         _subscribers.add(chat_id)
+        _persist_subscribers()
         await update.message.reply_text(
             "Reminders on. You'll get:\n"
             "• 30-min alerts before each session\n"

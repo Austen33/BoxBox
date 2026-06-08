@@ -8,16 +8,16 @@ from utils.rate_limit import is_rate_limited
 from utils.telegram_safe import safe_reply
 
 
-async def fantasy_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    user_id = update.effective_user.id
+async def run_fantasy(message, user_id: int) -> None:
+    """Core /fantasy logic, reusable by the command and the race-weekend hub."""
     if is_rate_limited(user_id):
-        await update.message.reply_text("Slow down — one question at a time.")
+        await message.reply_text("Slow down — one question at a time.")
         return
 
-    await update.message.reply_chat_action("typing")
+    await message.reply_chat_action("typing")
 
     next_race, qual_data = await asyncio.gather(
-        asyncio.to_thread(get_next_race_info),
+        get_next_race_info(),
         asyncio.to_thread(get_qualifying_results),
     )
     race_name = next_race["name"] if next_race else "the next race"
@@ -66,4 +66,8 @@ Don't hedge everything. Make actual recommendations with actual reasoning."""
         model=SMART_MODEL,
     )
 
-    await safe_reply(update.message, response)
+    await safe_reply(message, response)
+
+
+async def fantasy_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await run_fantasy(update.message, update.effective_user.id)

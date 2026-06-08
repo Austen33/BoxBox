@@ -25,18 +25,30 @@ QUALI_KEYWORDS = [
     "quali", "qualifying", "qualified", "pole", "front row", "q3", "grid",
 ]
 
-LIVE_KEYWORDS = [
+# Words that signal the user wants up-to-date / current-season information.
+CURRENT_SIGNALS = [
     "latest", "recent", "now", "current", "today", "this week", "this season",
-    "2024", "2025", "2026", "news", "rumour", "rumor", "update", "just",
-    "announce", "signed", "confirmed", "breaking",
-    "driver", "drivers", "grid", "fantasy", "team", "worst", "best", "pick",
-    "season", "lineup", "constructor",
+    "upcoming", "next race", "so far", "right now",
+]
+
+# Words that imply a live web search is genuinely needed (news, transfers,
+# paddock talk). Deliberately excludes ultra-generic terms like
+# "driver"/"team"/"best"/"season" that used to fire Tavily on pure-history
+# questions ("who's the best driver ever").
+LIVE_KEYWORDS = [
+    "news", "rumour", "rumor", "update", "just",
+    "announce", "announced", "signed", "confirmed", "breaking",
+    "lineup", "transfer", "contract", "fantasy",
 ]
 
 _RACE_RESULT_KEYWORDS = [
     "last race", "most recent race", "most recent", "recent race",
     "race result", "podium", "who won", "winner",
 ]
+
+
+def _extract_years(query: str) -> list[int]:
+    return [int(y) for y in re.findall(r"\b(?:19|20)\d{2}\b", query)]
 
 
 async def _fetch_qualifying(query: str, query_lower: str) -> dict | None:
@@ -51,11 +63,34 @@ async def _fetch_qualifying(query: str, query_lower: str) -> dict | None:
 
 async def get_f1_response(query: str, for_voice: bool = False) -> str:
     query_lower = query.lower()
-    needs_standings_data = any(kw in query_lower for kw in STANDINGS_KEYWORDS)
-    needs_quali_data = any(kw in query_lower for kw in QUALI_KEYWORDS)
-    needs_live_search = needs_standings_data or needs_quali_data or any(
-        kw in query_lower for kw in LIVE_KEYWORDS
+    current_year = get_current_season()
+    years = _extract_years(query)
+    mentions_past_year = any(y < current_year for y in years)
+    mentions_current_year = any(y == current_year for y in years)
+    has_current_signal = mentions_current_year or any(
+        kw in query_lower for kw in CURRENT_SIGNALS
     )
+
+    asks_standings = any(kw in query_lower for kw in STANDINGS_KEYWORDS)
+    asks_quali = any(kw in query_lower for kw in QUALI_KEYWORDS)
+
+    needs_standings_data = asks_standings
+    needs_quali_data = asks_quali
+    # Only reach for live web search when there's a genuine "currentness" signal
+    # or an explicit live-news keyword — not for purely historical questions.
+    needs_live_search = (
+        any(kw in query_lower for kw in LIVE_KEYWORDS)
+        or has_current_signal
+        or (asks_standings and not mentions_past_year)
+        or (asks_quali and not mentions_past_year)
+    )
+
+    # Standings/results tables are season-specific. If the user named a past
+    # year, fetch that season's data so we never pass 2026 tables for a 2008
+    # question. ``None`` means current season.
+    standings_year = None
+    if asks_standings and mentions_past_year:
+        standings_year = max(y for y in years if y < current_year)
 
     f1_context = ""
     if needs_quali_data:
@@ -72,14 +107,14 @@ async def get_f1_response(query: str, for_voice: bool = False) -> str:
         fetch_constructors = "constructor" in query_lower or "team" in query_lower
         if fetch_constructors:
             driver_data, constructor_data, race_data = await asyncio.gather(
-                get_driver_standings(),
-                get_constructor_standings(),
-                get_last_race_results_async(),
+                get_driver_standings(standings_year),
+                get_constructor_standings(standings_year),
+                get_last_race_results_async(standings_year),
             )
         else:
             driver_data, race_data = await asyncio.gather(
-                get_driver_standings(),
-                get_last_race_results_async(),
+                get_driver_standings(standings_year),
+                get_last_race_results_async(standings_year),
             )
             constructor_data = None
 

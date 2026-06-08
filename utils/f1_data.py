@@ -1,10 +1,11 @@
 import fastf1
 import pandas as pd
 import pytz
-import aiohttp
 from datetime import datetime
 import os
 import tempfile
+
+from utils.http import get_json
 
 cache_dir = os.path.join(tempfile.gettempdir(), "fastf1_cache")
 os.makedirs(cache_dir, exist_ok=True)
@@ -12,6 +13,12 @@ fastf1.Cache.enable_cache(cache_dir)
 
 IRISH_TZ = pytz.timezone("Europe/Dublin")
 UTC_TZ = pytz.utc
+
+JOLPI_BASE = "https://api.jolpi.ca/ergast/f1"
+
+# Cache TTLs (seconds) for Jolpi/Ergast reads.
+STANDINGS_TTL = 600     # standings/results change only on race days
+SCHEDULE_TTL = 21600    # season schedule / round resolution (6h)
 
 
 def get_current_season() -> int:
@@ -22,24 +29,6 @@ def get_event_schedule(year: int = None) -> fastf1.events.EventSchedule:
     if year is None:
         year = get_current_season()
     return fastf1.get_event_schedule(year)
-
-
-def get_next_event() -> dict | None:
-    now_utc = datetime.now(UTC_TZ)
-    schedule = get_event_schedule()
-
-    for _, event in schedule.iterrows():
-        if pd.isna(event.get("Session5Date")):
-            continue
-        race_date = event["Session5Date"]
-        if hasattr(race_date, "tzinfo") and race_date.tzinfo is None:
-            race_date = UTC_TZ.localize(race_date)
-        elif not hasattr(race_date, "tzinfo"):
-            continue
-        if race_date > now_utc:
-            return event.to_dict()
-
-    return None
 
 
 def format_session_time(dt, timezone=IRISH_TZ) -> str:
@@ -56,11 +45,6 @@ def format_session_time(dt, timezone=IRISH_TZ) -> str:
     return local_dt.strftime("%a %d %b, %H:%M")
 
 
-_race_info_cache: dict | None = None
-_race_info_cache_time: datetime | None = None
-_RACE_INFO_CACHE_TTL = 3600  # seconds
-
-
 def _parse_jolpi_dt(date_str: str, time_str: str) -> datetime | None:
     try:
         return datetime.fromisoformat(f"{date_str}T{time_str}".replace("Z", "+00:00"))
@@ -69,26 +53,15 @@ def _parse_jolpi_dt(date_str: str, time_str: str) -> datetime | None:
 
 
 async def get_next_race_info() -> dict | None:
-    global _race_info_cache, _race_info_cache_time
-
     now_utc = datetime.now(UTC_TZ)
-    if (
-        _race_info_cache is not None
-        and _race_info_cache_time is not None
-        and (now_utc - _race_info_cache_time).total_seconds() < _RACE_INFO_CACHE_TTL
-    ):
-        return _race_info_cache
-
     year = get_current_season()
     url = f"{JOLPI_BASE}/{year}.json?limit=30"
 
-    try:
-        async with aiohttp.ClientSession() as http:
-            async with http.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                if resp.status != 200:
-                    return None
-                data = await resp.json()
+    data = await get_json(url, ttl_seconds=SCHEDULE_TTL)
+    if not data:
+        return None
 
+    try:
         races = data["MRData"]["RaceTable"]["Races"]
 
         next_race = None
@@ -153,8 +126,6 @@ async def get_next_race_info() -> dict | None:
             "countdown": countdown,
         }
 
-        _race_info_cache = result
-        _race_info_cache_time = now_utc
         return result
 
     except Exception:
@@ -343,37 +314,32 @@ def get_lap_data_for_strategy(year: int = None, round_number: int = None) -> dic
         return {"error": str(e)}
 
 
-JOLPI_BASE = "https://api.jolpi.ca/ergast/f1"
-
-
 async def resolve_round(year: int, circuit_name: str) -> int | None:
     """Resolve a circuit name to a round number for a given year via Ergast."""
     try:
-        async with aiohttp.ClientSession() as session:
-            url = f"{JOLPI_BASE}/{year}.json?limit=30"
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                if resp.status != 200:
-                    return None
-                data = await resp.json()
-
-            races = data["MRData"]["RaceTable"]["Races"]
-            name_lower = circuit_name.lower().strip()
-
-            for race in races:
-                circuit = race.get("Circuit", {})
-                circuit_id = circuit.get("circuitId", "").lower()
-                circuit_name_api = circuit.get("circuitName", "").lower()
-                race_name = race.get("raceName", "").lower()
-                locality = circuit.get("Location", {}).get("locality", "").lower()
-                country = circuit.get("Location", {}).get("country", "").lower()
-
-                if (name_lower in circuit_id or circuit_id in name_lower or
-                    name_lower in circuit_name_api or circuit_name_api in name_lower or
-                    name_lower in race_name or race_name in name_lower or
-                    name_lower in locality or name_lower in country):
-                    return int(race["round"])
-
+        url = f"{JOLPI_BASE}/{year}.json?limit=30"
+        data = await get_json(url, ttl_seconds=SCHEDULE_TTL)
+        if not data:
             return None
+
+        races = data["MRData"]["RaceTable"]["Races"]
+        name_lower = circuit_name.lower().strip()
+
+        for race in races:
+            circuit = race.get("Circuit", {})
+            circuit_id = circuit.get("circuitId", "").lower()
+            circuit_name_api = circuit.get("circuitName", "").lower()
+            race_name = race.get("raceName", "").lower()
+            locality = circuit.get("Location", {}).get("locality", "").lower()
+            country = circuit.get("Location", {}).get("country", "").lower()
+
+            if (name_lower in circuit_id or circuit_id in name_lower or
+                name_lower in circuit_name_api or circuit_name_api in name_lower or
+                name_lower in race_name or race_name in name_lower or
+                name_lower in locality or name_lower in country):
+                return int(race["round"])
+
+        return None
     except Exception:
         return None
 
@@ -490,11 +456,9 @@ async def get_full_race_results_async(year: int = None) -> dict | None:
         year = get_current_season()
     url = f"{JOLPI_BASE}/{year}/last/results.json"
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                if resp.status != 200:
-                    return {"error": f"API returned {resp.status}"}
-                data = await resp.json()
+        data = await get_json(url, ttl_seconds=STANDINGS_TTL)
+        if not data:
+            return {"error": "F1 data service unavailable"}
 
         races = data["MRData"]["RaceTable"]["Races"]
         if not races:
@@ -536,11 +500,9 @@ async def get_last_race_results_async(year: int = None) -> dict | None:
         year = get_current_season()
     url = f"{JOLPI_BASE}/{year}/last/results.json"
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                if resp.status != 200:
-                    return {"error": f"API returned {resp.status}"}
-                data = await resp.json()
+        data = await get_json(url, ttl_seconds=STANDINGS_TTL)
+        if not data:
+            return {"error": "F1 data service unavailable"}
 
         races = data["MRData"]["RaceTable"]["Races"]
         if not races:
@@ -573,11 +535,9 @@ async def get_driver_standings(year: int = None) -> dict | None:
         year = get_current_season()
     url = f"{JOLPI_BASE}/{year}/driverStandings.json?limit=10"
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                if resp.status != 200:
-                    return {"error": f"API returned {resp.status}"}
-                data = await resp.json()
+        data = await get_json(url, ttl_seconds=STANDINGS_TTL)
+        if not data:
+            return {"error": "F1 data service unavailable"}
 
         lists = data["MRData"]["StandingsTable"]["StandingsLists"]
         if not lists:
@@ -609,11 +569,9 @@ async def get_constructor_standings(year: int = None) -> dict | None:
         year = get_current_season()
     url = f"{JOLPI_BASE}/{year}/constructorStandings.json?limit=10"
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                if resp.status != 200:
-                    return {"error": f"API returned {resp.status}"}
-                data = await resp.json()
+        data = await get_json(url, ttl_seconds=STANDINGS_TTL)
+        if not data:
+            return {"error": "F1 data service unavailable"}
 
         lists = data["MRData"]["StandingsTable"]["StandingsLists"]
         if not lists:

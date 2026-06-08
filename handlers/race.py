@@ -1,9 +1,22 @@
-from telegram import Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 from utils.f1_data import get_next_race_info
 from utils.groq_client import chat, FAST_MODEL
 from utils.rate_limit import is_rate_limited
 from utils.telegram_safe import safe_reply
+
+
+def _hub_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🔮 Predict", callback_data="hub:predict"),
+            InlineKeyboardButton("🎯 Fantasy", callback_data="hub:fantasy"),
+        ],
+        [
+            InlineKeyboardButton("🏆 Standings", callback_data="hub:standings"),
+            InlineKeyboardButton("⏰ Add reminder", callback_data="hub:reminder"),
+        ],
+    ])
 
 
 async def race_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -48,4 +61,4 @@ Just give the race name, countdown, and session times. Nothing else."""
         model=FAST_MODEL,
     )
 
-    await safe_reply(update.message, response)
+    await safe_reply(update.message, response, reply_markup=_hub_keyboard())
