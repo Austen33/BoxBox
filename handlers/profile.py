@@ -85,24 +85,32 @@ async def _fetch_driver_current_standing(driver_id: str, year: int) -> dict | No
 
 # --- Constructor data ----------------------------------------------------
 
-async def _fetch_constructor_id_by_name(name: str) -> str | None:
+async def _fetch_constructor_id_by_name(name: str, season: str = "current") -> str | None:
     name_lower = name.lower().strip()
-    if name_lower in _CONSTRUCTOR_ALIASES:
-        return _CONSTRUCTOR_ALIASES[name_lower]
 
-    data = await get_json(f"{JOLPI_BASE}/current/constructors.json", ttl_seconds=CONSTRUCTORS_TTL)
+    data = await get_json(f"{JOLPI_BASE}/{season}/constructors.json", ttl_seconds=CONSTRUCTORS_TTL)
+    season_ids: set[str] = set()
     try:
         for c in data["MRData"]["ConstructorTable"]["Constructors"]:
-            cid = c.get("constructorId", "").lower()
+            cid = c.get("constructorId", "")
+            cid_lower = cid.lower()
+            season_ids.add(cid_lower)
             cname = c.get("name", "").lower()
-            if name_lower == cid or name_lower in cname or cname in name_lower:
-                return c.get("constructorId")
+            if name_lower == cid_lower or name_lower in cname or cname in name_lower:
+                return cid
     except (TypeError, KeyError):
         pass
 
-    for key, cid in _CONSTRUCTOR_ALIASES.items():
-        if key in name_lower or name_lower in key:
-            return cid
+    # Alias map as a fallback, but only honour aliases that point at a team
+    # actually competing in this season (so old names don't resolve).
+    alias = _CONSTRUCTOR_ALIASES.get(name_lower)
+    if alias is None:
+        for key, cid in _CONSTRUCTOR_ALIASES.items():
+            if key in name_lower or name_lower in key:
+                alias = cid
+                break
+    if alias and (not season_ids or alias in season_ids):
+        return alias
     return None
 
 

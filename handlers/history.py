@@ -63,10 +63,19 @@ async def _fetch_driver_results_at_circuit(driver_id: str, circuit_id: str, limi
         return []
 
 
-async def _fetch_driver_id_by_name(name: str) -> str | None:
-    """Resolve driver name to driverId for Ergast API."""
+async def _fetch_driver_id_by_name(
+    name: str, include_historical: bool = True, season: str = "current"
+) -> str | None:
+    """Resolve driver name to driverId for Ergast API.
+
+    ``season`` scopes the roster lookup (``"current"`` by default, or a year
+    like ``"2026"`` to pin it). When ``include_historical`` is False, only that
+    season's drivers are matched (the direct Ergast lookup is skipped). Callers
+    that need to disambiguate against team names — e.g. ``/follow McLaren``
+    should be the team, not the historical driver "Bruce McLaren" — use False.
+    """
     try:
-        url = f"{JOLPI_BASE}/current/drivers.json"
+        url = f"{JOLPI_BASE}/{season}/drivers.json"
         data = await get_json(url, ttl_seconds=DRIVERS_TTL)
         if not data:
             return None
@@ -87,11 +96,12 @@ async def _fetch_driver_id_by_name(name: str) -> str | None:
             if name_lower in full:
                 return d.get("driverId")
 
-        # If not found in current drivers, try direct lookup
-        url = f"{JOLPI_BASE}/drivers/{name_lower}.json"
-        data = await get_json(url, ttl_seconds=DRIVERS_TTL)
-        if data and data["MRData"]["DriverTable"]["Drivers"]:
-            return data["MRData"]["DriverTable"]["Drivers"][0].get("driverId")
+        # If not found in current drivers, try a direct (historical) lookup.
+        if include_historical:
+            url = f"{JOLPI_BASE}/drivers/{name_lower}.json"
+            data = await get_json(url, ttl_seconds=DRIVERS_TTL)
+            if data and data["MRData"]["DriverTable"]["Drivers"]:
+                return data["MRData"]["DriverTable"]["Drivers"][0].get("driverId")
 
         return None
     except Exception:

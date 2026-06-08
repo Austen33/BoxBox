@@ -13,6 +13,7 @@ import re
 from telegram import Update
 from telegram.ext import ContextTypes
 
+from utils.f1_data import get_current_season
 from utils.rate_limit import is_rate_limited
 from utils.telegram_safe import safe_reply
 from utils import store
@@ -67,24 +68,39 @@ def match_follows(chat_id: int, text: str) -> list[str]:
 
 # --- Resolution ----------------------------------------------------------
 
-async def _resolve_entry(text: str) -> dict:
-    """Turn free-form input into a follow entry (driver, team, or plain text)."""
-    driver_id = await _fetch_driver_id_by_name(text)
-    if driver_id:
-        bio = await _fetch_driver_bio(driver_id)
-        if bio:
-            family = bio.get("familyName", "")
-            code = bio.get("code", "")
-            label = f"{bio.get('givenName', '')} {family}".strip() or text
-            keywords = {label.lower(), family.lower(), code.lower()}
-            return {
-                "type": "driver",
-                "id": driver_id,
-                "label": label,
-                "keywords": sorted(k for k in keywords if k),
-            }
+async def _driver_entry(driver_id: str, fallback_label: str) -> dict | None:
+    bio = await _fetch_driver_bio(driver_id)
+    if not bio:
+        return None
+    family = bio.get("familyName", "")
+    code = bio.get("code", "")
+    label = f"{bio.get('givenName', '')} {family}".strip() or fallback_label
+    keywords = {label.lower(), family.lower(), code.lower()}
+    return {
+        "type": "driver",
+        "id": driver_id,
+        "label": label,
+        "keywords": sorted(k for k in keywords if k),
+    }
 
-    constructor_id = await _fetch_constructor_id_by_name(text)
+
+async def _resolve_entry(text: str) -> dict:
+    """Turn free-form input into a follow entry (driver, team, or plain text).
+
+    Resolution is scoped strictly to the current (2026) season: only this
+    year's drivers and constructors are matched. Anything that isn't on the
+    current grid falls through to a plain-text follow rather than resolving to
+    a past-season driver/team. Precedence is driver → team → plain text.
+    """
+    season = str(get_current_season())
+
+    driver_id = await _fetch_driver_id_by_name(text, include_historical=False, season=season)
+    if driver_id:
+        entry = await _driver_entry(driver_id, text)
+        if entry:
+            return entry
+
+    constructor_id = await _fetch_constructor_id_by_name(text, season=season)
     if constructor_id:
         bio = await _fetch_constructor_bio(constructor_id)
         label = (bio.get("name") if bio else None) or text.title()
