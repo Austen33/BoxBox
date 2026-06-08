@@ -1,9 +1,17 @@
 import asyncio
+import re
 from telegram import Update
 from telegram.ext import ContextTypes
 from utils.groq_client import chat, SMART_MODEL
 from utils.tavily_client import search, format_search_results
-from utils.f1_data import get_last_race_results_async, get_driver_standings, get_constructor_standings
+from utils.f1_data import (
+    get_last_race_results_async,
+    get_driver_standings,
+    get_constructor_standings,
+    get_qualifying_results,
+    get_current_season,
+    resolve_round,
+)
 from utils.rate_limit import is_rate_limited
 from utils.telegram_safe import safe_reply
 
@@ -11,6 +19,10 @@ STANDINGS_KEYWORDS = [
     "standings", "championship", "points", "who is leading", "who's leading",
     "results", "last race", "most recent race", "most recent", "recent race",
     "winner", "who won", "podium", "race result",
+]
+
+QUALI_KEYWORDS = [
+    "quali", "qualifying", "qualified", "pole", "front row", "q3", "grid",
 ]
 
 LIVE_KEYWORDS = [
@@ -27,12 +39,35 @@ _RACE_RESULT_KEYWORDS = [
 ]
 
 
+async def _fetch_qualifying(query: str, query_lower: str) -> dict | None:
+    """Fetch real qualifying results, resolving a named circuit if the query
+    contains one, otherwise the most recent completed qualifying session."""
+    year_match = re.search(r"\b(19|20)\d{2}\b", query)
+    year = int(year_match.group(0)) if year_match else get_current_season()
+
+    round_number = await resolve_round(year, query)
+    return await asyncio.to_thread(get_qualifying_results, year, round_number)
+
+
 async def get_f1_response(query: str, for_voice: bool = False) -> str:
     query_lower = query.lower()
     needs_standings_data = any(kw in query_lower for kw in STANDINGS_KEYWORDS)
-    needs_live_search = needs_standings_data or any(kw in query_lower for kw in LIVE_KEYWORDS)
+    needs_quali_data = any(kw in query_lower for kw in QUALI_KEYWORDS)
+    needs_live_search = needs_standings_data or needs_quali_data or any(
+        kw in query_lower for kw in LIVE_KEYWORDS
+    )
 
     f1_context = ""
+    if needs_quali_data:
+        qual_data = await _fetch_qualifying(query, query_lower)
+        if qual_data and "error" not in qual_data:
+            f1_context += f"Qualifying — {qual_data['name']} {qual_data['year']}:\n"
+            for q in qual_data["results"]:
+                q3 = q.get("q3", "").strip()
+                time_part = f" - {q3}" if q3 and q3 not in ("nan", "NaT", "None") else ""
+                f1_context += f"P{q['position']}: {q['driver']} ({q['team']}){time_part}\n"
+            f1_context += "\n"
+
     if needs_standings_data:
         fetch_constructors = "constructor" in query_lower or "team" in query_lower
         if fetch_constructors:
@@ -103,6 +138,7 @@ async def get_f1_response(query: str, for_voice: bool = False) -> str:
 {combined_context}
 
 Answer this F1 question accurately. Prioritise the live F1 data over search results over training knowledge for current season info.
+For current-season race or qualifying results, only state results that appear in the Live F1 data above. If the specific session or race the user asked about is not present in that data, say you don't have those results rather than guessing — never produce results from memory or infer them from news headlines.
 For historical or technical questions, draw on your training knowledge.
 Keep the answer concise and to the point. If you are not certain about something, say so.{formatting_instruction}"""
 
