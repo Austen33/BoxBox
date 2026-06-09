@@ -84,13 +84,13 @@ async def _driver_entry(driver_id: str, fallback_label: str) -> dict | None:
     }
 
 
-async def _resolve_entry(text: str) -> dict:
-    """Turn free-form input into a follow entry (driver, team, or plain text).
+async def _resolve_entry(text: str) -> dict | None:
+    """Resolve free-form input to a follow entry for a current-grid driver/team.
 
     Resolution is scoped strictly to the current (2026) season: only this
-    year's drivers and constructors are matched. Anything that isn't on the
-    current grid falls through to a plain-text follow rather than resolving to
-    a past-season driver/team. Precedence is driver → team → plain text.
+    year's drivers and constructors can be followed. Anything not on the
+    current grid — retired drivers, defunct teams, arbitrary text — returns
+    ``None`` so the caller can reject it. Precedence is driver → team.
     """
     season = str(get_current_season())
 
@@ -112,7 +112,7 @@ async def _resolve_entry(text: str) -> dict:
             "keywords": sorted(keywords),
         }
 
-    return {"type": "text", "id": text.lower(), "label": text.title(), "keywords": [text.lower()]}
+    return None
 
 
 # --- Handlers ------------------------------------------------------------
@@ -145,6 +145,14 @@ async def follow_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     text = " ".join(args)
     await update.message.reply_chat_action("typing")
     entry = await _resolve_entry(text)
+
+    if entry is None:
+        await update.message.reply_text(
+            f"Couldn't find a 2026 driver or team called '{text}'.\n"
+            "You can only follow drivers and teams on the current grid — "
+            "try a 3-letter code (VER, NOR, LEC) or a team name (Ferrari, McLaren)."
+        )
+        return
 
     if any(e["type"] == entry["type"] and e["id"] == entry["id"] for e in entries):
         await update.message.reply_text(f"You already follow {entry['label']}.")
