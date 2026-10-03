@@ -18,7 +18,9 @@ _PROMPT = """The user sent an image (a screenshot, photo, timing screen, graphic
 Describe only what you can actually see, then answer. Read any text, numbers, timings and team colours carefully
 and say if something is too small or unclear to read. Do not guess driver identities from faces; use captions,
 numbers, names and team liveries visible in the image. For anything about current results or standings that is
-not visible in the image, rely on the live data you were given and say so. Keep it concise."""
+not visible in the image, rely on the live data you were given and say so. Keep it concise.
+If the image and question have nothing to do with Formula 1 or motorsport, don't describe or answer it;
+reply in one sentence that you're an F1 bot and only answer F1 questions."""
 
 
 async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

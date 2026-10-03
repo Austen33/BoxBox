@@ -575,6 +575,12 @@ async def weekend_text() -> str:
             lines.append("McLaren qualifying: " + ", ".join(mc))
     elif "Q" not in stored:
         lines.append("Qualifying: no result yet.")
+    if quali and not race:
+        from utils import grid
+        q_rows = [{"code": x["Driver"].get("code", "")} for x in quali[0]["QualifyingResults"]]
+        block = await grid.grid_block(wk["raceName"], q_rows)
+        if block:
+            lines.append(block)
     if sprint:
         sp = sprint[0]["SprintResults"]
         lines.append("Sprint result: " + "; ".join(

@@ -4,7 +4,7 @@ import re
 from telegram import Update
 from telegram.ext import ContextTypes
 from utils.groq_client import chat, SMART_MODEL, FAST_MODEL
-from utils import convo, mclaren
+from utils import convo, mclaren, topic
 from utils.tavily_client import search, format_search_results
 from utils.f1_data import (
     get_last_race_results_async,
@@ -277,6 +277,8 @@ Keep the answer concise and to the point. If you are not certain about something
 async def answer_and_remember(chat_id: int, query: str, for_voice: bool = False) -> str:
     """Answer with this chat's recent history, then store the exchange."""
     history = convo.get_history(chat_id)
+    if not await topic.is_on_topic(query, history):
+        return topic.OFF_TOPIC_REPLY
     response = await get_f1_response(query, for_voice=for_voice, history=history)
     convo.add_exchange(chat_id, query, response)
     return response
