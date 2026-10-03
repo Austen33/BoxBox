@@ -220,6 +220,9 @@ async def live_snapshot() -> str:
             lines.append("Next races: " + ", ".join(
                 f"{_short_race(r['raceName'])} {r['date']}" for r in remaining[:4]
             ) + f". {len(remaining)} rounds remain.")
+        weekend = await weekend_text()
+        if weekend:
+            lines.append(weekend)
         return "\n".join(lines)
     except Exception:
         logger.warning("live_snapshot failed", exc_info=True)
@@ -480,6 +483,111 @@ async def debrief_text() -> tuple[str, str]:
 # Alerts (scheduler)
 # --------------------------------------------------------------------------
 
+def _session_dt(race: dict, key: str) -> datetime | None:
+    sess = race if key == "Race" else race.get(key)
+    if not sess or not sess.get("date"):
+        return None
+    t = (sess.get("time") or "00:00:00Z").rstrip("Z")
+    try:
+        return datetime.fromisoformat(f"{sess['date']}T{t}").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
+async def current_weekend(year: int | None = None) -> dict | None:
+    """The race weekend that is underway or most recently finished.
+
+    Jolpi's ``last`` selector means "round of the last *race*", so it can't see
+    a Saturday qualifying before Sunday's race. This picks the latest round whose
+    first session has started, so same-weekend results are found by round number.
+    """
+    year = year or get_current_season()
+    now = datetime.now(timezone.utc)
+    current = None
+    for r in await get_schedule(year):
+        start = next(
+            (dt for dt in (_session_dt(r, k) for k in ("FirstPractice", "SprintQualifying", "Qualifying", "Race")) if dt),
+            None,
+        )
+        if start and start <= now:
+            current = r
+    return current
+
+
+async def _weekend_sessions(year: int, rnd: int) -> tuple[list, list, list]:
+    quali, sprint, race = await asyncio.gather(
+        _races(f"{year}/{rnd}/qualifying.json", "Races"),
+        _races(f"{year}/{rnd}/sprint.json", "Races"),
+        _races(f"{year}/{rnd}/results.json", "Races"),
+    )
+    return quali, sprint, race
+
+
+async def qualifying_results(year: int, rnd: int) -> dict | None:
+    """Official qualifying classification in the shape handlers/ask.py expects."""
+    races = await _races(f"{year}/{rnd}/qualifying.json", "Races")
+    if not races:
+        return None
+    race = races[0]
+    return {
+        "name": race["raceName"],
+        "year": year,
+        "round": rnd,
+        "results": [
+            {
+                "position": int(x["position"]),
+                "driver": f"{x['Driver']['givenName']} {x['Driver']['familyName']}",
+                "team": x["Constructor"]["name"],
+                "abbreviation": x["Driver"].get("code", ""),
+                "q1": x.get("Q1", ""),
+                "q2": x.get("Q2", ""),
+                "q3": x.get("Q3", "") or x.get("Q2", "") or x.get("Q1", ""),
+            }
+            for x in race["QualifyingResults"]
+        ],
+    }
+
+
+async def weekend_text() -> str:
+    """This weekend's published sessions (qualifying, sprint, race), McLaren-first."""
+    year = get_current_season()
+    wk = await current_weekend(year)
+    if not wk:
+        return ""
+    rnd = int(wk["round"])
+    quali, sprint, race = await _weekend_sessions(year, rnd)
+    lines = [f"THIS WEEKEND: {wk['raceName']} (round {rnd}), race day {wk['date']}."]
+    # Sessions auto-collected from F1 live timing right after they end. Official
+    # Jolpi results below take precedence for qualifying, sprint and race.
+    from utils import sessions
+    stored = sessions.get_stored(year, rnd)
+    official = {"Q": bool(quali), "S": bool(sprint), "R": bool(race)}
+    for _key, code, _name, _mins in sessions.SESSIONS:
+        if code in stored and not official.get(code):
+            lines.append(sessions.describe(stored[code]))
+    if quali:
+        q = quali[0]["QualifyingResults"]
+        lines.append("Qualifying result (official): " + "; ".join(
+            f"P{x['position']} {x['Driver']['familyName']} ({x['Constructor']['name']})" for x in q[:10]))
+        mc = [f"{x['Driver']['familyName']} P{x['position']}" for x in q
+              if x["Constructor"]["constructorId"] == TEAM_ID]
+        if mc:
+            lines.append("McLaren qualifying: " + ", ".join(mc))
+    elif "Q" not in stored:
+        lines.append("Qualifying: no result yet.")
+    if sprint:
+        sp = sprint[0]["SprintResults"]
+        lines.append("Sprint result: " + "; ".join(
+            f"{_fmt_pos(x['positionText'])} {x['Driver']['familyName']}" for x in sp[:8]))
+    if race:
+        rr = race[0]["Results"]
+        lines.append("Race result: " + "; ".join(
+            f"{_fmt_pos(x['positionText'])} {x['Driver']['familyName']}" for x in rr[:10]))
+    elif "R" not in stored:
+        lines.append("Race: not run yet or no result yet.")
+    return "\n".join(lines)
+
+
 async def latest_session_markers() -> dict:
     """Which McLaren-relevant sessions have published results.
 
@@ -492,17 +600,32 @@ async def latest_session_markers() -> dict:
         _races(f"{year}/last/qualifying.json", "Races"),
         _races(f"{year}/last/sprint.json", "Races"),
     )
-    return {
+    markers = {
         "race": int(race[0]["round"]) if race else 0,
         "quali": int(quali[0]["round"]) if quali else 0,
         "sprint": int(sprint[0]["round"]) if sprint else 0,
     }
+    # "last" lags until the race is run; check the current weekend directly.
+    wk = await current_weekend(year)
+    if wk:
+        rnd = int(wk["round"])
+        wq, ws, wr = await _weekend_sessions(year, rnd)
+        if wq:
+            markers["quali"] = max(markers["quali"], rnd)
+        if ws:
+            markers["sprint"] = max(markers["sprint"], rnd)
+        if wr:
+            markers["race"] = max(markers["race"], rnd)
+    return markers
 
 
 async def quali_alert_text() -> tuple[str, str]:
     """(race name, McLaren-first data text) for the latest qualifying."""
     year = get_current_season()
-    races = await _races(f"{year}/last/qualifying.json", "Races")
+    wk = await current_weekend(year)
+    races = await _races(f"{year}/{wk['round']}/qualifying.json", "Races") if wk else []
+    if not races:
+        races = await _races(f"{year}/last/qualifying.json", "Races")
     if not races:
         return "", ""
     q = races[0]["QualifyingResults"]

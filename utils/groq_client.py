@@ -413,9 +413,10 @@ async def _system_with_live(system: str | None) -> str:
     """Default system prompt plus the auto-refreshed standings block."""
     if system is not None:
         return system
-    from utils.mclaren import live_snapshot  # local import: avoids a cycle
-    live = await live_snapshot()
-    return f"{SYSTEM_PROMPT}\n\n{live}" if live else SYSTEM_PROMPT
+    from utils.mclaren import live_snapshot  # local imports: avoid a cycle
+    from utils.news import latest_news
+    live, news = await asyncio.gather(live_snapshot(), latest_news())
+    return "\n\n".join(p for p in (SYSTEM_PROMPT, live, news) if p)
 
 
 async def chat(messages: list, model: str = SMART_MODEL, system: str | None = None) -> str:

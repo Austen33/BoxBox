@@ -91,6 +91,15 @@ def setup_scheduler(application: Application) -> None:
         id="mclaren_sessions",
         replace_existing=True,
     )
+    # Auto-collect every session from F1 live timing right after it ends:
+    # plan now, then re-plan every 6h so new weekends get picked up.
+    _scheduler.add_job(
+        _plan_session_collection,
+        trigger=IntervalTrigger(hours=6),
+        id="plan_sessions",
+        replace_existing=True,
+        next_run_time=datetime.datetime.now(pytz.utc) + datetime.timedelta(seconds=15),
+    )
     _scheduler.start()
     logger.info("Scheduler started (news checks every 30min, McLaren result alerts every 10min).")
 
@@ -230,6 +239,20 @@ News:
 
     except Exception as e:
         logger.error(f"Error checking breaking news: {e}")
+
+
+async def _on_session_collected(year: int, rnd: int, code: str, result: dict) -> None:
+    """A session just finished: make the next answer pick up fresh news too."""
+    from utils import news
+    news.invalidate()
+
+
+async def _plan_session_collection() -> None:
+    from utils import sessions
+    try:
+        await sessions.plan_jobs(_scheduler, on_new=_on_session_collected)
+    except Exception:
+        logger.exception("Planning session collection failed")
 
 
 _MCLAREN_STATE_KEY = "mclaren_alert_state"

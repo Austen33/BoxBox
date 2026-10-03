@@ -85,6 +85,16 @@ async def _fetch_qualifying(query: str, query_lower: str) -> dict | None:
     year = int(year_match.group(0)) if year_match else get_current_season()
 
     round_number = await resolve_round(year, query)
+    if round_number is None and year == get_current_season():
+        wk = await mclaren.current_weekend(year)
+        round_number = int(wk["round"]) if wk else None
+
+    # Official classification from Jolpi first. FastF1's live-timing order can be
+    # wrong or incomplete right after a session, so it's only the fallback.
+    if round_number is not None:
+        official = await mclaren.qualifying_results(year, round_number)
+        if official:
+            return official
     return await asyncio.to_thread(get_qualifying_results, year, round_number)
 
 
