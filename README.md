@@ -2,7 +2,7 @@
 
 A Telegram bot that turns Formula 1 data into conversational answers. Ask it anything about F1 in chat, get a session countdown, predict the next winner from qualifying form, break down tyre strategies after a race, or send a voice note and have it transcribed and answered.
 
-BoxBox combines live timing data from [FastF1](https://github.com/theOehrly/Fast-F1), web search via [Tavily](https://tavily.com/), and LLM responses from [Groq](https://groq.com/) (Llama 3.1/3.3 + Whisper) behind a [python-telegram-bot](https://github.com/python-telegram-bot/python-telegram-bot) interface.
+BoxBox combines live timing data from [FastF1](https://github.com/theOehrly/Fast-F1), web search via [Tavily](https://tavily.com/), and LLM, speech-to-text and text-to-speech via [OpenRouter](https://openrouter.ai/) behind a [python-telegram-bot](https://github.com/python-telegram-bot/python-telegram-bot) interface.
 
 ---
 
@@ -58,7 +58,7 @@ handlers/
   voice.py                Voice-message ingest → Whisper → /ask flow
 utils/
   f1_data.py              FastF1 wrappers, schedule helpers, Irish-time formatting
-  groq_client.py          Groq Chat + Whisper client, TTS (edge-tts → gTTS fallback), token trimming
+  groq_client.py          OpenRouter chat, speech-to-text and TTS (gpt-audio → edge-tts → gTTS fallback), token trimming
   tavily_client.py        Tavily search wrapper + result formatter
   rate_limit.py           Per-user rate limiter
   telegram_safe.py        Safe reply helper (splits long messages for Telegram's 4096-char limit)
@@ -70,9 +70,12 @@ The bot runs as a single long-lived polling process. APScheduler handles the rem
 
 Defined in [utils/groq_client.py](utils/groq_client.py):
 
-- `llama-3.1-8b-instant` — fast path (news summarisation, simple classification)
-- `llama-3.3-70b-versatile` — main answer model
-- `whisper-large-v3-turbo` — voice-note transcription
+All models are served through OpenRouter and can be overridden with env vars:
+
+- `FAST_MODEL` (`openai/gpt-6-luna`) — fast path (race summaries, news summarisation, short lookups)
+- `SMART_MODEL` (`anthropic/claude-sonnet-5.5`) — main answer model (`/ask`, `/predict`, `/strategy`, `/rumour`, ...)
+- `STT_MODEL` (`google/gemini-3.5-flash-lite`) — voice-note transcription
+- `TTS_MODEL` (`openai/gpt-audio-mini`) and `TTS_VOICE` (`cedar`) — spoken replies, falling back to edge-tts then gTTS
 
 ---
 
@@ -82,7 +85,7 @@ Defined in [utils/groq_client.py](utils/groq_client.py):
 
 - Python 3.10+
 - A [Telegram bot token](https://core.telegram.org/bots#how-do-i-create-a-bot) from `@BotFather`
-- A [Groq API key](https://console.groq.com/keys)
+- An [OpenRouter API key](https://openrouter.ai/keys)
 - A [Tavily API key](https://app.tavily.com/) (free tier is enough for personal use)
 
 ### Install
@@ -101,7 +104,7 @@ Create a `.env` file in the project root:
 
 ```dotenv
 TELEGRAM_TOKEN=your_telegram_bot_token
-GROQ_API_KEY=your_groq_api_key
+OPEN_ROUTER_KEY=your_openrouter_api_key
 TAVILY_API_KEY=your_tavily_api_key
 TELEGRAM_CHAT_ID=your_personal_chat_id   # optional, only used for admin pings
 
@@ -137,7 +140,7 @@ Set the same environment variables in your platform's dashboard. The bot is a si
 - **Timezone** — session times are formatted in `Europe/Dublin` by default. Change `IRISH_TZ` in [utils/f1_data.py](utils/f1_data.py) to your timezone.
 - **Tone and voice** — edit `SYSTEM_PROMPT` in [utils/groq_client.py](utils/groq_client.py). The current prompt biases towards a "race engineer talking to a smart fan" tone and bans common LLM filler phrases.
 - **News sources** — `NEWS_SOURCES` and `BREAKING_KEYWORDS` in [handlers/notify.py](handlers/notify.py) control what the watcher considers breaking news.
-- **Models** — swap the `FAST_MODEL` / `SMART_MODEL` constants in [utils/groq_client.py](utils/groq_client.py) for any other Groq-hosted model.
+- **Models** — swap the `FAST_MODEL` / `SMART_MODEL` constants in [utils/groq_client.py](utils/groq_client.py) for any other OpenRouter model (or set the env vars above).
 - **Rate limit** — adjust the window in [utils/rate_limit.py](utils/rate_limit.py).
 
 ---
@@ -156,7 +159,7 @@ See [requirements.txt](requirements.txt). The notable ones:
 
 - [python-telegram-bot](https://github.com/python-telegram-bot/python-telegram-bot) `21.6` — Telegram client
 - [fastf1](https://github.com/theOehrly/Fast-F1) `3.4.0` — F1 timing data
-- [groq](https://github.com/groq/groq-python) `0.9.0` — LLM + Whisper
+- [httpx](https://www.python-httpx.org/) — OpenRouter API calls
 - [tavily-python](https://github.com/tavily-ai/tavily-python) `0.3.9` — web search
 - [apscheduler](https://github.com/agronholm/apscheduler) `3.10.4` — reminder + news jobs
 

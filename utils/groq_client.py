@@ -1,31 +1,71 @@
 import asyncio
+import base64
+import json
 import logging
 import os
 import re
 import shutil
-from groq import AsyncGroq
+
+import httpx
 
 logger = logging.getLogger(__name__)
 
-_client: AsyncGroq | None = None
+OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+
+_client: httpx.AsyncClient | None = None
 
 
-def _get_client() -> AsyncGroq:
-    """Lazily construct the Groq client so missing env vars don't break import."""
+def _api_key() -> str:
+    key = os.environ.get("OPEN_ROUTER_KEY")
+    if not key:
+        raise RuntimeError(
+            "OPEN_ROUTER_KEY environment variable is not set. "
+            "Add it to your .env file or environment."
+        )
+    return key
+
+
+def _get_client() -> httpx.AsyncClient:
+    """Lazily construct the HTTP client so missing env vars don't break import."""
     global _client
     if _client is None:
-        api_key = os.environ.get("GROQ_API_KEY")
-        if not api_key:
-            raise RuntimeError(
-                "GROQ_API_KEY environment variable is not set. "
-                "Add it to your .env file or environment."
-            )
-        _client = AsyncGroq(api_key=api_key)
+        _client = httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=10.0))
     return _client
 
-FAST_MODEL = "llama-3.1-8b-instant"
-SMART_MODEL = "llama-3.3-70b-versatile"
-WHISPER_MODEL = "whisper-large-v3-turbo"
+
+def _headers() -> dict:
+    return {
+        "Authorization": f"Bearer {_api_key()}",
+        "Content-Type": "application/json",
+        "X-Title": "BoxBox",
+    }
+
+
+async def _post(payload: dict, attempts: int = 3) -> dict:
+    """POST a chat completion to OpenRouter, retrying on 429/5xx."""
+    delay = 1.0
+    for attempt in range(attempts):
+        resp = await _get_client().post(OPENROUTER_URL, headers=_headers(), json=payload)
+        if resp.status_code in (429, 500, 502, 503, 504) and attempt < attempts - 1:
+            logger.warning("OpenRouter %s, retrying in %.0fs", resp.status_code, delay)
+            await asyncio.sleep(delay)
+            delay *= 2
+            continue
+        resp.raise_for_status()
+        data = resp.json()
+        if "error" in data:
+            raise RuntimeError(f"OpenRouter error: {data['error']}")
+        return data
+    raise RuntimeError("OpenRouter request failed")
+
+
+# Cheap and fast for short lookups; stronger model for reasoning-heavy answers.
+FAST_MODEL = os.getenv("FAST_MODEL", "openai/gpt-6-luna")
+SMART_MODEL = os.getenv("SMART_MODEL", "anthropic/claude-sonnet-5.5")
+STT_MODEL = os.getenv("STT_MODEL", "google/gemini-3.5-flash-lite")
+TTS_MODEL = os.getenv("TTS_MODEL", "openai/gpt-audio-mini")
+# gpt-audio voices: alloy, ash, ballad, coral, echo, sage, shimmer, verse, marin, cedar
+TTS_VOICE = os.getenv("TTS_VOICE", "cedar")
 
 # --- edge-tts (primary TTS) -----------------------------------------------
 # Microsoft neural voices via Edge read-aloud. Free, no API key required.
@@ -33,17 +73,12 @@ WHISPER_MODEL = "whisper-large-v3-turbo"
 # Override via EDGE_TTS_VOICE env var. Full voice list: `edge-tts --list-voices`
 EDGE_TTS_VOICE = os.getenv("EDGE_TTS_VOICE", "en-GB-RyanNeural")
 
-# --- Groq Orpheus (fallback TTS) ------------------------------------------
-TTS_MODEL = "canopylabs/orpheus-v1-english"
-# Orpheus voices: tara, leah, jess, leo, dan, mia, zac, zoe. Override via env to taste.
-TTS_VOICE = os.getenv("TTS_VOICE", "tara")
-# Playback tempo multiplier applied in ffmpeg (pitch preserved). >1.0 speeds up the
-# slow, deliberate Orpheus cadence to sound more fluent. ElevenLabs is naturally
-# paced, so this is only applied to the Orpheus/gTTS fallbacks. Range ~0.9–1.4.
+# Playback tempo multiplier for the edge-tts/gTTS fallbacks (ffmpeg atempo, pitch
+# preserved). Range ~0.5-2.0.
 try:
-    TTS_SPEED = float(os.getenv("TTS_SPEED", "1.18"))
+    TTS_SPEED = float(os.getenv("TTS_SPEED", "1.0"))
 except ValueError:
-    TTS_SPEED = 1.18
+    TTS_SPEED = 1.0
 TTS_SPEED = max(0.5, min(TTS_SPEED, 2.0))  # atempo single-stage limits
 
 _MARKDOWN_RE = re.compile(r"[*_`\[\]\\]")
@@ -71,12 +106,15 @@ def _find_ffmpeg() -> str | None:
 
 
 async def _convert_to_ogg_opus(
-    audio_bytes: bytes, input_format: str = "wav", speed: float = TTS_SPEED
+    audio_bytes: bytes, input_format: str = "wav", speed: float = 1.0
 ) -> bytes:
     ffmpeg = _find_ffmpeg()
     if not ffmpeg:
         raise FileNotFoundError("ffmpeg not found")
-    args = [ffmpeg, "-f", input_format, "-i", "pipe:0"]
+    args = [ffmpeg, "-f", input_format]
+    if input_format == "s16le":  # raw PCM16 from gpt-audio: 24kHz mono
+        args += ["-ar", "24000", "-ac", "1"]
+    args += ["-i", "pipe:0"]
     if abs(speed - 1.0) > 0.01:
         args += ["-filter:a", f"atempo={speed:.3f}"]
     args += [
@@ -86,6 +124,23 @@ async def _convert_to_ogg_opus(
     ]
     proc = await asyncio.create_subprocess_exec(
         *args,
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await proc.communicate(input=audio_bytes)
+    if proc.returncode != 0:
+        raise RuntimeError(f"ffmpeg conversion failed: {stderr.decode()}")
+    return stdout
+
+
+async def _convert_to_mp3(audio_bytes: bytes, input_format: str = "ogg") -> bytes:
+    ffmpeg = _find_ffmpeg()
+    if not ffmpeg:
+        raise FileNotFoundError("ffmpeg not found")
+    proc = await asyncio.create_subprocess_exec(
+        ffmpeg, "-f", input_format, "-i", "pipe:0",
+        "-f", "mp3", "pipe:1", "-loglevel", "error",
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
@@ -125,12 +180,58 @@ async def _gtts_mp3(text: str) -> bytes:
     return await loop.run_in_executor(None, _run)
 
 
+async def _openrouter_tts_pcm(text: str) -> bytes:
+    """Speak `text` with an OpenRouter audio model. Returns raw 24kHz mono PCM16.
+
+    Audio output requires streaming; the audio arrives as base64 PCM16 deltas.
+    """
+    payload = {
+        "model": TTS_MODEL,
+        "modalities": ["text", "audio"],
+        "audio": {"voice": TTS_VOICE, "format": "pcm16"},
+        "stream": True,
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "You are a text-to-speech engine. Read the user's message aloud "
+                    "exactly as written, in a calm, natural British commentator tone. "
+                    "Do not answer it, add to it or comment on it."
+                ),
+            },
+            {"role": "user", "content": text},
+        ],
+    }
+    pcm = bytearray()
+    async with _get_client().stream(
+        "POST", OPENROUTER_URL, headers=_headers(), json=payload
+    ) as resp:
+        if resp.status_code >= 400:
+            body = (await resp.aread()).decode(errors="replace")
+            raise RuntimeError(f"OpenRouter TTS {resp.status_code}: {body[:300]}")
+        async for line in resp.aiter_lines():
+            if not line.startswith("data:"):
+                continue
+            data = line[5:].strip()
+            if not data or data == "[DONE]":
+                continue
+            try:
+                chunk = json.loads(data)
+            except json.JSONDecodeError:
+                continue
+            for choice in chunk.get("choices", []):
+                audio = (choice.get("delta") or {}).get("audio") or {}
+                if audio.get("data"):
+                    pcm += base64.b64decode(audio["data"])
+    return bytes(pcm)
+
+
 async def synthesize_speech(text: str) -> tuple[bytes, str]:
     """Returns (audio_bytes, fmt) where fmt is 'ogg' or 'mp3'.
 
-    Engine priority: ElevenLabs (natural, fluent) -> Groq Orpheus -> gTTS.
+    Engine priority: OpenRouter audio model -> edge-tts -> gTTS.
     """
-    cleaned = _strip_markdown(text)
+    cleaned = _strip_markdown(_strip_emotion_tags(text))
     if len(cleaned) > 4096:
         cleaned = cleaned[:4096]
 
@@ -138,31 +239,25 @@ async def synthesize_speech(text: str) -> tuple[bytes, str]:
     source_fmt = "mp3"
     convert_speed = 1.0
 
-    # 1. edge-tts (preferred) — free, no API key, natural neural voice -> MP3
-    try:
-        source_bytes = await _edge_tts_mp3(cleaned)
-        source_fmt = "mp3"
-        logger.info("TTS: edge-tts OK (%d bytes)", len(source_bytes))
-    except Exception:
-        logger.warning("edge-tts failed, trying Groq Orpheus", exc_info=True)
+    # 1. OpenRouter audio model (raw PCM16 -> needs ffmpeg to be playable)
+    if _find_ffmpeg():
+        try:
+            pcm = await _openrouter_tts_pcm(cleaned)
+            if pcm:
+                source_bytes, source_fmt = pcm, "s16le"
+                logger.info("TTS: %s OK (%d bytes)", TTS_MODEL, len(pcm))
+        except Exception:
+            logger.warning("OpenRouter TTS failed, trying edge-tts", exc_info=True)
 
+    # 2. edge-tts — free, no API key -> MP3
     if not source_bytes:
-        # 2. Groq Orpheus -> WAV
         convert_speed = TTS_SPEED
         try:
-            response = await _get_client().audio.speech.create(
-                model=TTS_MODEL,
-                voice=TTS_VOICE,
-                input=cleaned,
-                response_format="wav",
-            )
-            wav = await response.read()
-            if wav:
-                source_bytes = wav
-                source_fmt = "wav"
-                logger.info("TTS: Groq Orpheus OK (%d bytes)", len(wav))
+            source_bytes = await _edge_tts_mp3(cleaned)
+            source_fmt = "mp3"
+            logger.info("TTS: edge-tts OK (%d bytes)", len(source_bytes))
         except Exception:
-            logger.warning("Groq TTS unavailable, using gTTS fallback", exc_info=True)
+            logger.warning("edge-tts failed, using gTTS fallback", exc_info=True)
 
     # 3. gTTS (last resort) -> MP3
     if not source_bytes:
@@ -180,12 +275,10 @@ async def synthesize_speech(text: str) -> tuple[bytes, str]:
         except Exception:
             logger.warning("OGG/Opus conversion failed", exc_info=True)
 
-    # ffmpeg not available — return MP3 directly (caller uses reply_audio)
+    # ffmpeg not available — only MP3 sources can be returned directly
     if source_fmt == "mp3":
         return source_bytes, "mp3"
-    # Had WAV but no ffmpeg — fall back to gTTS MP3
-    mp3 = await _gtts_mp3(cleaned)
-    return mp3, "mp3"
+    return await _gtts_mp3(cleaned), "mp3"
 
 SYSTEM_PROMPT = """You are BoxBox, a Telegram F1 bot. You are a knowledgeable mate who follows F1 obsessively.
 
@@ -237,19 +330,48 @@ def _trim_messages_to_limit(messages: list, token_limit: int = 8000) -> list:
 async def chat(messages: list, model: str = SMART_MODEL, system: str = SYSTEM_PROMPT) -> str:
     full_messages = [{"role": "system", "content": system}] + messages
     full_messages = _trim_messages_to_limit(full_messages)
-    response = await _get_client().chat.completions.create(
-        model=model,
-        messages=full_messages,
-        temperature=0.7,
-        max_tokens=1024,
-    )
-    return response.choices[0].message.content
+    data = await _post({
+        "model": model,
+        "messages": full_messages,
+        "temperature": 0.7,
+        "max_tokens": 1024,
+    })
+    return data["choices"][0]["message"]["content"] or ""
 
 
 async def transcribe_audio(audio_bytes: bytes, filename: str = "voice.ogg") -> str:
-    transcription = await _get_client().audio.transcriptions.create(
-        file=(filename, audio_bytes),
-        model=WHISPER_MODEL,
-        response_format="text",
-    )
-    return transcription
+    """Transcribe speech with an audio-input model via OpenRouter."""
+    fmt = filename.rsplit(".", 1)[-1].lower()
+    # OpenRouter's input_audio reliably accepts wav/mp3; convert Telegram's OGG/Opus.
+    if fmt not in ("wav", "mp3") and _find_ffmpeg():
+        try:
+            audio_bytes = await _convert_to_mp3(audio_bytes, input_format=fmt)
+            fmt = "mp3"
+        except Exception:
+            logger.warning("Audio conversion to mp3 failed, sending original", exc_info=True)
+    data = await _post({
+        "model": STT_MODEL,
+        "temperature": 0,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": (
+                            "Transcribe this audio exactly. Output only the spoken words, "
+                            "nothing else. If there is no speech, output nothing."
+                        ),
+                    },
+                    {
+                        "type": "input_audio",
+                        "input_audio": {
+                            "data": base64.b64encode(audio_bytes).decode(),
+                            "format": fmt,
+                        },
+                    },
+                ],
+            }
+        ],
+    })
+    return (data["choices"][0]["message"]["content"] or "").strip()
