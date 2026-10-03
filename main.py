@@ -42,6 +42,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+from utils import errorlog
+errorlog.install()
+
 
 async def testvoice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     import io
@@ -107,6 +110,37 @@ async def stats_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if not is_admin(update.effective_chat.id):
         return
     await safe_reply(update.message, format_stats())
+
+
+async def errors_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Admin diagnostics: recent errors + config check, safe to paste into a chat.
+
+    /errors [n]  show the last n errors (default 5)
+    /errors clear  empty the log
+    If no admin chat id is configured the log is shown to the caller (it is
+    redacted), so you can debug a fresh deploy; set ADMIN_CHAT_ID to lock it down.
+    """
+    from utils.admin import get_admin_chat_id, is_admin
+    from utils import errorlog
+
+    chat_id = update.effective_chat.id
+    admin_set = get_admin_chat_id() is not None
+    if admin_set and not is_admin(chat_id):
+        return
+
+    arg = (context.args[0].lower() if context.args else "")
+    if arg == "clear":
+        errorlog.clear()
+        await update.message.reply_text("Error log cleared.")
+        return
+    n = int(arg) if arg.isdigit() else 5
+    text = errorlog.report(n)
+    if not admin_set:
+        text = (
+            f"NOTE: no ADMIN_CHAT_ID set, so anyone can read this. Your chat id is {chat_id}; "
+            f"set ADMIN_CHAT_ID={chat_id} to restrict /errors to you.\n\n" + text
+        )
+    await safe_reply(update.message, text, parse_mode=None)
 
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -215,6 +249,7 @@ def main() -> None:
     # Admin/diagnostic commands (hidden from the public command menu).
     application.add_handler(CommandHandler("testvoice", testvoice_handler))
     application.add_handler(CommandHandler("stats", stats_handler))
+    application.add_handler(CommandHandler("errors", errors_handler))
 
     application.add_handler(
         MessageHandler(filters.VOICE, track("voice")(voice_handler))

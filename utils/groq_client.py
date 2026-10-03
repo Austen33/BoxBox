@@ -51,7 +51,10 @@ async def _post(payload: dict, attempts: int = 3) -> dict:
             await asyncio.sleep(delay)
             delay *= 2
             continue
-        resp.raise_for_status()
+        if resp.status_code >= 400:
+            raise RuntimeError(
+                f"OpenRouter HTTP {resp.status_code} for model {payload.get('model')}: {resp.text[:300]}"
+            )
         data = resp.json()
         if "error" in data:
             raise RuntimeError(f"OpenRouter error: {data['error']}")
