@@ -11,7 +11,7 @@ from utils.telegram_safe import safe_reply
 async def run_fantasy(message, user_id: int) -> None:
     """Core /fantasy logic, reusable by the command and the race-weekend hub."""
     if is_rate_limited(user_id):
-        await message.reply_text("Slow down — one question at a time.")
+        await message.reply_text("Slow down, one question at a time.")
         return
 
     await message.reply_chat_action("typing")

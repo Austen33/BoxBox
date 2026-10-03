@@ -150,3 +150,65 @@ async def grid_block(race_name: str, quali_rows: list[dict]) -> str:
         "the FIA's official grid can differ slightly): "
         + ", ".join(f"P{i + 1} {d}" for i, d in enumerate(grid))
     )
+
+
+async def grid_data() -> dict | None:
+    """Everything needed to draw this weekend's starting grid.
+
+    Official once the race has been run (grid slots from the race result),
+    otherwise provisional: official qualifying order + reported penalties.
+    """
+    from utils import mclaren, sessions
+    from utils.f1_data import get_current_season
+
+    year = get_current_season()
+    wk = await mclaren.current_weekend(year)
+    if not wk:
+        return None
+    rnd = int(wk["round"])
+    quali, _sprint, race = await mclaren._weekend_sessions(year, rnd)
+    meta = await sessions.driver_meta(year, rnd)
+
+    def entry(pos: int, drv: dict, team_fallback: str, note: str = "") -> dict:
+        code = drv.get("code") or drv["familyName"][:3].upper()
+        m = meta.get(code, {})
+        return {
+            "pos": pos, "code": code, "name": m.get("name") or drv["familyName"],
+            "team": m.get("team") or team_fallback, "color": m.get("color", ""), "note": note,
+        }
+
+    base = {"race": wk["raceName"], "round": rnd, "date": wk["date"]}
+    if race:
+        results = race[0]["Results"]
+        on_grid = sorted([r for r in results if int(r.get("grid", 0)) > 0], key=lambda r: int(r["grid"]))
+        pit = [r for r in results if int(r.get("grid", 0)) == 0]
+        entries = [entry(i + 1, r["Driver"], r["Constructor"]["name"]) for i, r in enumerate(on_grid)]
+        entries += [entry(len(entries) + i + 1, r["Driver"], r["Constructor"]["name"], "PIT LANE")
+                    for i, r in enumerate(pit)]
+        return {**base, "status": "official", "entries": entries,
+                "footnote": "Official starting grid from the race classification. "
+                            "Team colours from F1 timing data."}
+    if not quali:
+        return None
+
+    rows = quali[0]["QualifyingResults"]
+    by_code = {(r["Driver"].get("code") or r["Driver"]["familyName"][:3].upper()): r for r in rows}
+    codes = list(by_code)
+    pens = await penalties(wk["raceName"], codes)
+    pen_by = {p["driver"]: p for p in pens}
+    order = apply_penalties(codes, pens)
+
+    entries = []
+    for i, code in enumerate(order):
+        r = by_code[code]
+        note = ""
+        if code in pen_by:
+            p = pen_by[code]
+            what = "PIT LANE" if p["pit_lane"] else "BACK OF GRID" if p["places"] == BACK_OF_GRID else f"+{p['places']} PEN"
+            note = f"{what} · Q{r['position']}"
+        entries.append(entry(i + 1, r["Driver"], r["Constructor"]["name"], note))
+    pen_text = ", ".join(f"{p['driver']} ({p['reason'] or 'grid penalty'})" for p in pens) or "none reported"
+    return {**base, "status": "provisional", "entries": entries, "penalties": pens,
+            "footnote": "Provisional: official qualifying order with grid penalties reported by F1 media "
+                        f"applied ({pen_text}). The FIA confirms the official grid before the race. "
+                        "Team colours from F1 timing data."}

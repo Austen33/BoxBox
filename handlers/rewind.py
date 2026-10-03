@@ -11,7 +11,7 @@ from utils.telegram_safe import safe_reply
 async def rewind_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     if is_rate_limited(user_id):
-        await update.message.reply_text("Slow down — one question at a time.")
+        await update.message.reply_text("Slow down, one question at a time.")
         return
 
     args = context.args or []
@@ -68,7 +68,7 @@ Write it like you're telling a mate who missed it. No filler. Under 200 words.
 
 If the {year} race did NOT happen, just state that fact in one sentence. Nothing else."""
             response = await chat(messages=[{"role": "user", "content": prompt}], model=SMART_MODEL)
-            await safe_reply(update.message, f"*{circuit_input.title()} GP {year} — Rewind*\n\n{response}")
+            await safe_reply(update.message, f"*{circuit_input.title()} GP {year}, Rewind*\n\n{response}")
             return
 
         await update.message.reply_text(
@@ -96,14 +96,14 @@ If the {year} race did NOT happen, just state that fact in one sentence. Nothing
     for f in race_data["finishers"]:
         grid = f["grid"]
         pos = f["position"]
-        gain_loss = f"+{grid - pos}" if grid > pos else f"{grid - pos}" if grid < pos else "—"
-        results_text += f"P{pos} {f['driver']} ({f['team']}) — started P{grid} ({gain_loss})\n"
+        gain_loss = f"+{grid - pos}" if grid > pos else f"{grid - pos}" if grid < pos else ", "
+        results_text += f"P{pos} {f['driver']} ({f['team']}), started P{grid} ({gain_loss})\n"
 
     dnfs_text = ""
     if race_data["dnfs"]:
         dnfs_text = "DNFs:\n"
         for d in race_data["dnfs"]:
-            dnfs_text += f"{d['driver']} ({d['team']}) — {d['status']} (started P{d['grid']})\n"
+            dnfs_text += f"{d['driver']} ({d['team']}), {d['status']} (started P{d['grid']})\n"
 
     events_text = ""
     if race_data["track_events"]:
@@ -148,4 +148,4 @@ Write a concise race rewind for a hardcore F1 fan. Rules:
 
     response = await chat(messages=[{"role": "user", "content": prompt}], model=SMART_MODEL)
 
-    await safe_reply(update.message, f"*{race_name} {year} — Rewind*\n\n{response}")
+    await safe_reply(update.message, f"*{race_name} {year}, Rewind*\n\n{response}")

@@ -165,7 +165,7 @@ async def driver_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     """/driver [name] — season standing + career stats + a short scouting note."""
     user_id = update.effective_user.id
     if is_rate_limited(user_id):
-        await update.message.reply_text("Slow down — one question at a time.")
+        await update.message.reply_text("Slow down, one question at a time.")
         return
 
     args = context.args or []
@@ -237,7 +237,7 @@ async def driver_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     prompt = f"""{card}
 
-In 2-3 sentences, give a punchy scouting-report read on this driver: their reputation, current form, and what they're known for. No filler, no preamble — talk like a race engineer to a smart fan."""
+In 2-3 sentences, give a punchy scouting-report read on this driver: their reputation, current form, and what they're known for. No filler, no preamble, talk like a race engineer to a smart fan."""
     blurb = await chat(messages=[{"role": "user", "content": prompt}], model=SMART_MODEL)
 
     await safe_reply(update.message, f"{card}\n\n{blurb}")
@@ -247,7 +247,7 @@ async def team_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     """/team [name] — constructor profile: season standing, line-up, short note."""
     user_id = update.effective_user.id
     if is_rate_limited(user_id):
-        await update.message.reply_text("Slow down — one question at a time.")
+        await update.message.reply_text("Slow down, one question at a time.")
         return
 
     args = context.args or []
@@ -303,7 +303,7 @@ async def team_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     prompt = f"""{card}
 
-In 2-3 sentences, give a punchy read on this F1 team's current situation: their form this season, strengths/weaknesses, and trajectory. No filler, no preamble — talk like a race engineer to a smart fan."""
+In 2-3 sentences, give a punchy read on this F1 team's current situation: their form this season, strengths/weaknesses, and trajectory. No filler, no preamble, talk like a race engineer to a smart fan."""
     blurb = await chat(messages=[{"role": "user", "content": prompt}], model=SMART_MODEL)
 
     await safe_reply(update.message, f"{card}\n\n{blurb}")

@@ -11,7 +11,7 @@ from utils.telegram_safe import safe_reply
 async def strategy_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     if is_rate_limited(user_id):
-        await update.message.reply_text("Slow down — one question at a time.")
+        await update.message.reply_text("Slow down, one question at a time.")
         return
 
     await update.message.reply_chat_action("typing")

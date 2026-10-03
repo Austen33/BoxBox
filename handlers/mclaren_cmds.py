@@ -23,7 +23,7 @@ _RULES = (
 async def _guard(update: Update) -> bool:
     """Rate limit + typing indicator. Returns False if the request should stop."""
     if is_rate_limited(update.effective_user.id):
-        await update.message.reply_text("Slow down — one question at a time.")
+        await update.message.reply_text("Slow down, one question at a time.")
         return False
     await update.message.reply_chat_action("typing")
     return True

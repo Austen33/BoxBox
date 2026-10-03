@@ -15,7 +15,7 @@ def _is_finisher(result: dict) -> bool:
 async def result_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     if is_rate_limited(user_id):
-        await update.message.reply_text("Slow down — one question at a time.")
+        await update.message.reply_text("Slow down, one question at a time.")
         return
 
     await update.message.reply_chat_action("typing")
@@ -51,6 +51,6 @@ async def result_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         lines.append("DNF:")
         for r in dnfs:
             last = r["driver"].split()[-1]
-            lines.append(f"{last} — {r['status']}")
+            lines.append(f"{last}, {r['status']}")
 
     await safe_reply(update.message, "\n".join(lines))

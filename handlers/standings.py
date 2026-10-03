@@ -9,7 +9,7 @@ from utils.telegram_safe import safe_reply
 async def run_standings(message, user_id: int) -> None:
     """Core /standings logic, reusable by the command and the race-weekend hub."""
     if is_rate_limited(user_id):
-        await message.reply_text("Slow down — one question at a time.")
+        await message.reply_text("Slow down, one question at a time.")
         return
 
     await message.reply_chat_action("typing")
@@ -25,7 +25,7 @@ async def run_standings(message, user_id: int) -> None:
         lines.append(f"*Drivers Championship* (after round {drivers['round']})")
         for d in drivers["drivers"][:5]:
             lines.append(
-                f"P{d['position']}: {d['driver']} ({d['team']}) — {d['points']} pts, {d['wins']} wins"
+                f"P{d['position']}: {d['driver']} ({d['team']}), {d['points']} pts, {d['wins']} wins"
             )
     else:
         msg = drivers.get("error", "unavailable") if drivers else "unavailable"
@@ -36,7 +36,7 @@ async def run_standings(message, user_id: int) -> None:
     if constructors and "error" not in constructors:
         lines.append(f"*Constructors Championship* (after round {constructors['round']})")
         for c in constructors["constructors"][:5]:
-            lines.append(f"P{c['position']}: {c['team']} — {c['points']} pts")
+            lines.append(f"P{c['position']}: {c['team']}, {c['points']} pts")
     else:
         msg = constructors.get("error", "unavailable") if constructors else "unavailable"
         lines.append(f"Constructors standings unavailable: {msg}")

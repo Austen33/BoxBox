@@ -121,7 +121,7 @@ async def follow_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
     if is_rate_limited(user_id):
-        await update.message.reply_text("Slow down — one question at a time.")
+        await update.message.reply_text("Slow down, one question at a time.")
         return
 
     args = context.args or []
@@ -149,7 +149,7 @@ async def follow_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if entry is None:
         await update.message.reply_text(
             f"Couldn't find a 2026 driver or team called '{text}'.\n"
-            "You can only follow drivers and teams on the current grid — "
+            "You can only follow drivers and teams on the current grid, "
             "try a 3-letter code (VER, NOR, LEC) or a team name (Ferrari, McLaren)."
         )
         return
@@ -177,7 +177,7 @@ async def unfollow_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
     if is_rate_limited(user_id):
-        await update.message.reply_text("Slow down — one question at a time.")
+        await update.message.reply_text("Slow down, one question at a time.")
         return
 
     entries = _get(chat_id)

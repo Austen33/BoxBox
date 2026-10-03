@@ -63,7 +63,7 @@ def _fetch_fastest_lap(year: int, round_num: int, session_type: str, driver: str
 async def lap_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     if is_rate_limited(user_id):
-        await update.message.reply_text("Slow down — one question at a time.")
+        await update.message.reply_text("Slow down, one question at a time.")
         return
 
     args = context.args or []
@@ -107,10 +107,10 @@ async def lap_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     data_text = (
-        f"*{driver}* — {session_type} at {event_name} {year}\n"
+        f"*{driver}*, {session_type} at {event_name} {year}\n"
         f"Fastest: {data['lap_time']} (Lap {data['lap_num']}, {data['compound']})\n"
         f"S1 {data['s1']} | S2 {data['s2']} | S3 {data['s3']}\n"
-        f"Session best — S1 {data['best_s1']} | S2 {data['best_s2']} | S3 {data['best_s3']}"
+        f"Session best, S1 {data['best_s1']} | S2 {data['best_s2']} | S3 {data['best_s3']}"
     )
 
     prompt = f"""{data_text}

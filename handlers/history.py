@@ -246,7 +246,7 @@ async def history_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     """Handle /history command for driver stats at a circuit."""
     user_id = update.effective_user.id
     if is_rate_limited(user_id):
-        await update.message.reply_text("Slow down — one question at a time.")
+        await update.message.reply_text("Slow down, one question at a time.")
         return
 
     args = context.args or []
@@ -340,7 +340,7 @@ async def career_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     """Handle /career command for driver career timeline."""
     user_id = update.effective_user.id
     if is_rate_limited(user_id):
-        await update.message.reply_text("Slow down — one question at a time.")
+        await update.message.reply_text("Slow down, one question at a time.")
         return
 
     args = context.args or []
@@ -390,7 +390,7 @@ Provide a career overview in 4-5 sentences covering:
         return
 
     # Format career stats
-    text = f"*{driver_input.upper()} — Career Statistics*\n\n"
+    text = f"*{driver_input.upper()}, Career Statistics*\n\n"
     text += f"Races: {stats['total_races']}\n"
     text += f"Wins: {stats['wins']}\n"
     text += f"Podiums: {stats['podiums']}\n"

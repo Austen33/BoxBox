@@ -112,9 +112,9 @@ TTS_VOICE = os.getenv("TTS_VOICE", "cedar")
 
 # --- edge-tts (primary TTS) -----------------------------------------------
 # Microsoft neural voices via Edge read-aloud. Free, no API key required.
-# Default: en-GB-RyanNeural — calm, clear British male.
-# Override via EDGE_TTS_VOICE env var. Full voice list: `edge-tts --list-voices`
-EDGE_TTS_VOICE = os.getenv("EDGE_TTS_VOICE", "en-GB-RyanNeural")
+# Default: en-IE-ConnorNeural, an Irish male voice (en-IE-EmilyNeural is the
+# Irish female one). Override via EDGE_TTS_VOICE. Full list: `edge-tts --list-voices`
+EDGE_TTS_VOICE = os.getenv("EDGE_TTS_VOICE", "en-IE-ConnorNeural")
 
 # Playback tempo multiplier for the edge-tts/gTTS fallbacks (ffmpeg atempo, pitch
 # preserved). Range ~0.5-2.0.
@@ -214,7 +214,7 @@ async def _gtts_mp3(text: str) -> bytes:
     text = _strip_emotion_tags(text)
 
     def _run() -> bytes:
-        tts = gTTS(text[:4096], lang="en")
+        tts = gTTS(text[:4096], lang="en", tld="ie")  # Irish-accented Google voice
         buf = _io.BytesIO()
         tts.write_to_fp(buf)
         return buf.getvalue()
@@ -238,7 +238,7 @@ async def _openrouter_tts_pcm(text: str) -> bytes:
                 "role": "system",
                 "content": (
                     "You are a text-to-speech engine. Read the user's message aloud "
-                    "exactly as written, in a calm, natural British commentator tone. "
+                    "exactly as written, in a natural Irish accent. "
                     "Do not answer it, add to it or comment on it."
                 ),
             },
@@ -272,7 +272,7 @@ async def _openrouter_tts_pcm(text: str) -> bytes:
 async def synthesize_speech(text: str) -> tuple[bytes, str]:
     """Returns (audio_bytes, fmt) where fmt is 'ogg' or 'mp3'.
 
-    Engine priority: OpenRouter audio model -> edge-tts -> gTTS.
+    Engine priority: edge-tts (Irish voice) -> OpenRouter audio model -> gTTS.
     """
     cleaned = _strip_markdown(_strip_emotion_tags(text))
     if len(cleaned) > 4096:
@@ -282,25 +282,24 @@ async def synthesize_speech(text: str) -> tuple[bytes, str]:
     source_fmt = "mp3"
     convert_speed = 1.0
 
-    # 1. OpenRouter audio model (raw PCM16 -> needs ffmpeg to be playable)
-    if _find_ffmpeg():
+    # 1. edge-tts: Irish voice (Connor), free, no API key -> MP3
+    try:
+        source_bytes = await _edge_tts_mp3(cleaned)
+        source_fmt = "mp3"
+        convert_speed = TTS_SPEED
+        logger.info("TTS: edge-tts %s OK (%d bytes)", EDGE_TTS_VOICE, len(source_bytes))
+    except Exception:
+        logger.warning("edge-tts failed, trying OpenRouter TTS", exc_info=True)
+
+    # 2. OpenRouter audio model (raw PCM16 -> needs ffmpeg to be playable)
+    if not source_bytes and _find_ffmpeg():
         try:
             pcm = await _openrouter_tts_pcm(cleaned)
             if pcm:
-                source_bytes, source_fmt = pcm, "s16le"
+                source_bytes, source_fmt, convert_speed = pcm, "s16le", 1.0
                 logger.info("TTS: %s OK (%d bytes)", TTS_MODEL, len(pcm))
         except Exception:
-            logger.warning("OpenRouter TTS failed, trying edge-tts", exc_info=True)
-
-    # 2. edge-tts — free, no API key -> MP3
-    if not source_bytes:
-        convert_speed = TTS_SPEED
-        try:
-            source_bytes = await _edge_tts_mp3(cleaned)
-            source_fmt = "mp3"
-            logger.info("TTS: edge-tts OK (%d bytes)", len(source_bytes))
-        except Exception:
-            logger.warning("edge-tts failed, using gTTS fallback", exc_info=True)
+            logger.warning("OpenRouter TTS failed, using gTTS fallback", exc_info=True)
 
     # 3. gTTS (last resort) -> MP3
     if not source_bytes:
@@ -323,7 +322,7 @@ async def synthesize_speech(text: str) -> tuple[bytes, str]:
         return source_bytes, "mp3"
     return await _gtts_mp3(cleaned), "mp3"
 
-SEASON_SNAPSHOT = """SEASON BACKGROUND (written 3 October 2026, after round 15 of the 2026 season). This is narrative background only. The LIVE DATA block and any live F1 data or search results in the conversation are newer and override it. For anything that may have changed since this date (results, standings, injuries, contracts, upgrades), say it may have moved on instead of stating it as current.
+SEASON_SNAPSHOT = """SEASON BACKGROUND (written 3 October 2026, after round 15 of the 2026 season). This is narrative background only. The LIVE DATA block and any live F1 data or search results in the conversation are newer and override it. 
 
 The 2026 regulations:
 - New cars with revised aerodynamics, new power units with far more electrical power, and 100% sustainable fuel. Cars are smaller and lighter than 2025.
@@ -348,31 +347,39 @@ SYSTEM_PROMPT = """You are BoxBox, a Telegram bot for McLaren Racing fans. You f
 Scope: you only talk about Formula 1 (and closely related motorsport: F1 history, the FIA, junior series feeding F1). If a message is about anything else (recipes, homework, coding, other sports, general knowledge, personal advice), do not answer it, even partly. Reply in one sentence that you're an F1 bot and only answer F1 questions. Greetings, thanks and questions about what you can do are fine.
 
 How McLaren changes your answers:
-- Put McLaren, Lando Norris and Oscar Piastri first. When someone asks about standings, results, a race or the championship, give the wider picture but make sure the McLaren angle is in it: where both cars finished, points scored, the gap to rivals, what it means for the constructors' fight.
+- McLaren is your team, so when a question is about standings, results or a race, include where Norris and Piastri are in a few words. Don't add McLaren to answers it isn't relevant to.
 - Be a fan, not a cheerleader. Celebrate wins and good drives, but be straight about bad weekends, mistakes, strategy calls that went wrong and pace deficits. Never spin a result. Never put down rival drivers or teams, give them credit where it is earned.
 - Treat Norris and Piastri evenly. Do not pick a favourite or stir up a rivalry. Report the numbers and let them speak.
-- For non-McLaren questions, answer them properly and briefly. Do not force McLaren into an answer where it does not belong.
 - McLaren history is fair game: Senna, Prost, Hakkinen, Hamilton, Button, Norris, the 1988 season, the 2025 title, and so on. Same rule as everything else, only state history you are sure of.
 
-Rules for every response:
-- Write in plain, natural English. No textbook tone, no news article style.
-- Never use em dashes as punctuation.
-- Never use phrases like "it is worth noting", "dive into", "certainly", "delve", "it is important to note", "fascinatingly", "it's worth mentioning", "needless to say","genuinely".
-- Avoid unnecessary bullet lists. Use prose unless a list genuinely helps the reader.
-- Technical explanations should feel like a race engineer talking to a smart fan who wants to actually understand something, not just get a surface level answer.
-- Always be factual. If something is uncertain, say so clearly. Never invent results, lap times, quotes, upgrades or team news.
-- Keep responses concise but complete. Do not pad answers with filler sentences.
-- Format for Telegram: use *bold* and _italic_ sparingly where it genuinely helps, keep paragraphs short.
-- Never recommend drivers or teams based on memory alone. Always treat driver and constructor information as potentially outdated and rely on the search context provided.
-- The current year is 2026. Always refer to the 2026 F1 season. If search results mention 2025, treat that as last season's data and flag it as such rather than presenting it as current.
+How to answer (most important):
+- Answer exactly what was asked, in the first sentence. No warm-up, no restating the question.
+- Be short. A simple factual question gets one or two sentences. Anything else stays under about 100 words unless the user asks for detail or an explanation.
+- Only add context that changes or explains the answer. No background they didn't ask for, no recap of the season, no summary at the end, no "let me know if...", no offers of more help.
+- Only mention McLaren when the question is about McLaren or McLaren is directly affected, and then in one short sentence at most.
+- No caveats or source talk unless the answer is genuinely uncertain, then one short clause. Never mention "my data", "the data you've got", "the live data block" or how you found something.
+- Don't revisit or correct earlier messages unless one was clearly wrong, and then fix it in one short sentence.
+
+Style:
+- UK English spelling and terms: tyre, colour, favourite, centre, defence, programme, analyse, realise, metres, kilometres.
+- Never use em dashes or en dashes. Use a comma, a full stop or brackets instead.
+- Plain, natural, conversational. No textbook or news-article tone.
+- No filler phrases: "it is worth noting", "it's worth mentioning", "dive into", "delve", "certainly", "needless to say", "genuinely", "at the end of the day", "it's important to note", "fascinatingly", "in summary".
+- Prose by default. Use a short list only for results or genuinely list-shaped answers.
+- Format for Telegram: *bold* sparingly for the key fact, short paragraphs.
+
+Accuracy:
+- Never invent results, lap times, quotes, penalties, upgrades or team news. If you don't have something, say so in a few words.
+- Treat driver and team information from memory as possibly outdated; rely on the live data and news provided.
+- The current year is 2026. If a source talks about 2025, that's last season.
 
 """ + SEASON_SNAPSHOT
 
 
 # Appended to the per-command prompts so every answer ends with the McLaren angle.
 MCLAREN_ANGLE = (
-    "\n\nFinish with one short line on what this means for McLaren (Norris and Piastri), "
-    "using only the information above. If there is no real McLaren angle, skip that line."
+    "\n\nKeep it tight: no intro, no filler, no closing summary. UK English, no em or en dashes. "
+    "If McLaren (Norris, Piastri) is directly affected, end with one short sentence on it; otherwise don't mention them."
 )
 
 
@@ -421,6 +428,43 @@ async def _system_with_live(system: str | None) -> str:
     return "\n\n".join(p for p in (SYSTEM_PROMPT, live, news) if p)
 
 
+_US_TO_UK = {
+    "tire": "tyre", "tires": "tyres", "color": "colour", "colors": "colours", "colored": "coloured",
+    "favorite": "favourite", "favorites": "favourites", "center": "centre", "centers": "centres",
+    "defense": "defence", "offense": "offence", "analyze": "analyse", "analyzed": "analysed",
+    "analyzing": "analysing", "realize": "realise", "realized": "realised", "organize": "organise",
+    "organized": "organised", "recognize": "recognise", "recognized": "recognised",
+    "apologize": "apologise", "apologized": "apologised", "behavior": "behaviour",
+    "maneuver": "manoeuvre", "maneuvers": "manoeuvres", "gray": "grey", "meters": "metres",
+    "kilometers": "kilometres", "liters": "litres", "practicing": "practising",
+    "criticize": "criticise", "criticized": "criticised", "minimize": "minimise",
+    "maximize": "maximise", "optimize": "optimise", "optimized": "optimised",
+    "prioritize": "prioritise", "prioritized": "prioritised", "penalize": "penalise",
+    "penalized": "penalised", "jewelry": "jewellery", "program": "programme",
+}
+_US_RE = re.compile(r"\b(" + "|".join(_US_TO_UK) + r")\b", re.IGNORECASE)
+
+
+def _uk_word(m: re.Match) -> str:
+    word = m.group(0)
+    uk = _US_TO_UK[word.lower()]
+    if word.isupper():
+        return uk.upper()
+    return uk[0].upper() + uk[1:] if word[0].isupper() else uk
+
+
+def tidy(text: str) -> str:
+    """Final pass on every reply: no em/en dashes, UK spelling."""
+    if not text:
+        return text
+    # — is an em dash, – an en dash (escaped so the literal characters
+    # never appear in this file).
+    text = re.sub(r"(\d)\s*[–—]\s*(\d)", r"\1-\2", text)  # ranges: 1-2
+    text = re.sub(r"\s*[–—]\s*", ", ", text)              # punctuation dash -> comma
+    text = text.replace(", ,", ",").replace(",.", ".")
+    return _US_RE.sub(_uk_word, text)
+
+
 async def chat(messages: list, model: str = SMART_MODEL, system: str | None = None) -> str:
     full_messages = [{"role": "system", "content": await _system_with_live(system)}] + messages
     full_messages = _trim_messages_to_limit(full_messages)
@@ -436,10 +480,10 @@ async def chat(messages: list, model: str = SMART_MODEL, system: str | None = No
         choice = data["choices"][0]
         text = choice["message"].get("content") or ""
         if choice.get("finish_reason") != "length":
-            return text
+            return tidy(text)
         logger.warning("%s hit max_tokens=%d (reply len %d)", model, max_tokens, len(text))
         max_tokens *= 2
-    return text
+    return tidy(text)
 
 
 async def chat_vision(

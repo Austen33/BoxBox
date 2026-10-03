@@ -28,7 +28,7 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if not msg or not msg.photo:
         return
     if is_rate_limited(update.effective_user.id):
-        await msg.reply_text("Slow down — one question at a time.")
+        await msg.reply_text("Slow down, one question at a time.")
         return
 
     await msg.reply_chat_action("typing")

@@ -35,7 +35,7 @@ async def send_voice_reply(message, text: str, caption: str | None = None) -> bo
 async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     if is_rate_limited(user_id):
-        await update.message.reply_text("Slow down — one question at a time.")
+        await update.message.reply_text("Slow down, one question at a time.")
         return
 
     voice = update.message.voice
@@ -60,7 +60,9 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
         await update.message.reply_chat_action("record_voice")
 
+        from handlers.ask import _maybe_grid
         if await send_voice_reply(update.message, response, caption=f'"{transcript}"'):
+            await _maybe_grid(update.message, transcript, response)
             return
 
         full_reply = f'_You said: "{transcript}"_\n\n{response}'

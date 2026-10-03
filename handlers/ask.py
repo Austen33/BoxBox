@@ -162,7 +162,7 @@ async def get_f1_response(query: str, for_voice: bool = False, history: list[dic
     if needs_quali_data:
         qual_data = await _fetch_qualifying(query, query_lower)
         if qual_data and "error" not in qual_data:
-            f1_context += f"Qualifying — {qual_data['name']} {qual_data['year']}:\n"
+            f1_context += f"Qualifying, {qual_data['name']} {qual_data['year']}:\n"
             for q in qual_data["results"]:
                 q3 = q.get("q3", "").strip()
                 time_part = f" - {q3}" if q3 and q3 not in ("nan", "NaT", "None") else ""
@@ -242,14 +242,10 @@ async def get_f1_response(query: str, for_voice: bool = False, history: list[dic
 
     if for_voice:
         formatting_instruction = (
-            "\nThis reply will be spoken aloud as a voice note, so write it exactly how a person talks, "
-            "not how they write. Use short sentences, contractions, and a relaxed, natural rhythm with commas "
-            "for breathing room. No bullet points, no markdown, no formatting symbols, no numbered lists. "
-            "Say things the way you'd say them out loud: 'Formula One' not 'F1', 'first' or 'took the win' "
-            "not 'P1', spell out numbers naturally. "
-            "Where it genuinely fits the tone, you may include at most one or two emotion cues in angle brackets "
-            "that the voice engine performs, chosen only from this exact set: <laugh> <chuckle> <sigh>. "
-            "Use them sparingly and only when they match the moment — never force them."
+            "\nThis reply will be spoken as a voice note. Two to four short sentences, about 60 words at most. "
+            "Answer the question in the first sentence. Talk like a person, not a document: contractions, "
+            "short sentences, no lists, no markdown or symbols. Say 'Formula One' not 'F1', 'fifth' not 'P5', "
+            "and say numbers the way you'd speak them. No intro and no sign-off."
         )
     else:
         formatting_instruction = (
@@ -264,9 +260,9 @@ async def get_f1_response(query: str, for_voice: bool = False, history: list[dic
 {combined_context}
 
 Answer this F1 question accurately. Prioritise the live F1 data over search results over training knowledge for current season info.
-For current-season race or qualifying results, only state results that appear in the Live F1 data above. If the specific session or race the user asked about is not present in that data, say you don't have those results rather than guessing — never produce results from memory or infer them from news headlines.
+For current-season race or qualifying results, only state results that appear in the Live F1 data above. If the specific session or race the user asked about is not present in that data, say you don't have those results rather than guessing. Never produce results from memory or infer them from news headlines.
 For historical or technical questions, draw on your training knowledge.
-Keep the answer concise and to the point. If you are not certain about something, say so.{formatting_instruction}"""
+Answer only what was asked, starting with the answer itself. Be brief: one or two sentences for a simple factual question, under about 100 words otherwise unless they asked for detail. No filler, no recap, no offers of more help. UK English, no em or en dashes.{formatting_instruction}"""
 
     return await chat(
         messages=list(history) + [{"role": "user", "content": prompt}],
@@ -287,7 +283,7 @@ async def answer_and_remember(chat_id: int, query: str, for_voice: bool = False)
 async def ask_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     if is_rate_limited(user_id):
-        await update.message.reply_text("Slow down — one question at a time.")
+        await update.message.reply_text("Slow down, one question at a time.")
         return
 
     query = " ".join(context.args) if context.args else ""
@@ -298,6 +294,15 @@ async def ask_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     await update.message.reply_chat_action("typing")
     response = await answer_and_remember(update.effective_chat.id, query)
     await safe_reply(update.message, response)
+    await _maybe_grid(update.message, query, response)
+
+
+async def _maybe_grid(message, query: str, response: str) -> None:
+    """Attach the grid graphic to grid questions (skipped for off-topic refusals)."""
+    from handlers.grid_cmd import wants_grid, send_grid_image
+    if response != topic.OFF_TOPIC_REPLY and wants_grid(query):
+        await message.reply_chat_action("upload_photo")
+        await send_grid_image(message)
 
 
 async def chat_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -305,11 +310,12 @@ async def chat_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if not update.message or not update.message.text:
         return
     if is_rate_limited(update.effective_user.id):
-        await update.message.reply_text("Slow down — one question at a time.")
+        await update.message.reply_text("Slow down, one question at a time.")
         return
     await update.message.reply_chat_action("typing")
     response = await answer_and_remember(update.effective_chat.id, update.message.text)
     await safe_reply(update.message, response)
+    await _maybe_grid(update.message, update.message.text, response)
 
 
 async def reset_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

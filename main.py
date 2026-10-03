@@ -30,6 +30,7 @@ from handlers.follow import follow_handler, unfollow_handler
 from handlers.menu import menu_callback_handler
 from handlers.mclaren_cmds import teammates_handler, title_handler, pace_handler, debrief_handler
 from handlers.photo import photo_handler
+from handlers.grid_cmd import grid_handler
 from handlers.ask import chat_handler, reset_handler
 from utils.telegram_safe import safe_reply
 from utils.metrics import track
@@ -63,7 +64,7 @@ async def testvoice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             await update.message.reply_voice(voice=InputFile(buf, filename="test.ogg"))
         else:
             await update.message.reply_audio(audio=InputFile(buf, filename="test.mp3"), title="BoxBox")
-        await update.message.reply_text(f"OK — {fmt}, {len(audio)} bytes.")
+        await update.message.reply_text(f"OK, {fmt}, {len(audio)} bytes.")
     except Exception as e:
         import traceback
         await update.message.reply_text(f"FAILED: {type(e).__name__}: {e}\n\n{traceback.format_exc()[-500:]}")
@@ -71,30 +72,31 @@ async def testvoice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     text = (
-        "*BoxBox* — your F1 race engineer in a bot\n\n"
+        "*BoxBox*, your F1 race engineer in a bot\n\n"
         "Here's what I can do:\n\n"
-        "/race — next race weekend countdown with all session times in Irish time\n"
-        "/predict — pre-race winner prediction based on qualifying, form, and circuit data\n"
-        "/strategy — post-race tyre strategy breakdown with optimal vs actual analysis\n"
-        "/fantasy — F1 Fantasy picks for the upcoming round\n"
-        "/standings — current drivers and constructors championship standings\n"
-        "/rumour \\[topic\\] — latest paddock rumours, flagged confirmed vs speculation\n"
-        "/ask \\[question\\] — any F1 question, live search for recent stuff\n"
-        "/lap \\[driver\\] \\[session\\] — fastest lap summary (e.g. /lap VER Q)\n"
-        "/h2h \\[driver1\\] \\[driver2\\] — head-to-head this season (e.g. /h2h VER NOR)\n"
-        "/history \\[driver\\] \\[circuit\\] — driver's past results at a track\n"
-        "/career \\[driver\\] — complete career statistics\n"
-        "/driver \\[name\\] — driver profile card: season form and career stats\n"
-        "/team \\[name\\] — team profile card: season standing and line-up\n"
-        "/rewind \\[circuit\\] \\[year\\] — relive key moments from any past race\n"
-        "/result — latest race result with concise DNF reasons\n"
-        "/follow \\[driver/team\\] — flag their breaking news (also /unfollow)\n"
-        "/teammates — Norris vs Piastri: the McLaren team-mate battle\n"
-        "/title — championship maths and what McLaren can still achieve\n"
-        "/pace — McLaren race pace vs Mercedes, Ferrari and Red Bull (upgrade watch)\n"
-        "/debrief — spoken McLaren debrief of the last race\n"
-        "/reset — clear our conversation\n"
-        "/notify — toggle session reminders, McLaren result alerts and breaking news\n"
+        "/race - next race weekend countdown with all session times in Irish time\n"
+        "/predict - pre-race winner prediction based on qualifying, form, and circuit data\n"
+        "/strategy - post-race tyre strategy breakdown with optimal vs actual analysis\n"
+        "/fantasy - F1 Fantasy picks for the upcoming round\n"
+        "/standings - current drivers and constructors championship standings\n"
+        "/rumour \\[topic\\] - latest paddock rumours, flagged confirmed vs speculation\n"
+        "/ask \\[question\\] - any F1 question, live search for recent stuff\n"
+        "/lap \\[driver\\] \\[session\\] - fastest lap summary (e.g. /lap VER Q)\n"
+        "/h2h \\[driver1\\] \\[driver2\\] - head-to-head this season (e.g. /h2h VER NOR)\n"
+        "/history \\[driver\\] \\[circuit\\] - driver's past results at a track\n"
+        "/career \\[driver\\] - complete career statistics\n"
+        "/driver \\[name\\] - driver profile card: season form and career stats\n"
+        "/team \\[name\\] - team profile card: season standing and line-up\n"
+        "/rewind \\[circuit\\] \\[year\\] - relive key moments from any past race\n"
+        "/result - latest race result with concise DNF reasons\n"
+        "/follow \\[driver/team\\] - flag their breaking news (also /unfollow)\n"
+        "/grid - starting grid graphic for this weekend (penalties applied)\n"
+        "/teammates - Norris vs Piastri: the McLaren team-mate battle\n"
+        "/title - championship maths and what McLaren can still achieve\n"
+        "/pace - McLaren race pace vs Mercedes, Ferrari and Red Bull (upgrade watch)\n"
+        "/debrief - spoken McLaren debrief of the last race\n"
+        "/reset - clear our conversation\n"
+        "/notify - toggle session reminders, McLaren result alerts and breaking news\n"
         "\n"
         "Or just chat: type a question (follow-ups work), send a *voice note*, or send a *photo or screenshot* and ask about it.\n\n"
         "Lights out and away we go."
@@ -192,6 +194,7 @@ async def post_init(application: Application) -> None:
         BotCommand("notify", "Toggle session reminders and breaking news"),
         BotCommand("rewind", "Relive key moments from a past race"),
         BotCommand("result", "Latest race result with DNF reasons"),
+        BotCommand("grid", "Starting grid graphic with penalties"),
         BotCommand("teammates", "Norris vs Piastri team-mate battle"),
         BotCommand("title", "Championship maths for McLaren"),
         BotCommand("pace", "McLaren race pace and upgrade watch"),
@@ -244,6 +247,7 @@ def main() -> None:
         "team": team_handler,
         "follow": follow_handler,
         "unfollow": unfollow_handler,
+        "grid": grid_handler,
         "teammates": teammates_handler,
         "title": title_handler,
         "pace": pace_handler,

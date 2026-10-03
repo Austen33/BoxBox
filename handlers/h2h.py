@@ -19,7 +19,7 @@ def _find_driver(standings: dict, code_or_name: str) -> dict | None:
 async def h2h_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     if is_rate_limited(user_id):
-        await update.message.reply_text("Slow down — one question at a time.")
+        await update.message.reply_text("Slow down, one question at a time.")
         return
 
     args = context.args or []
@@ -60,7 +60,7 @@ async def h2h_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     leader = d1 if points_diff > 0 else d2 if points_diff < 0 else None
 
     data_text = (
-        f"*Head-to-head — {year} season after R{standings['round']}*\n\n"
+        f"*Head-to-head, {year} season after R{standings['round']}*\n\n"
         f"{d1['driver']} ({d1['team']}): P{d1['position']} | {d1['points']} pts | {d1['wins']} wins\n"
         f"{d2['driver']} ({d2['team']}): P{d2['position']} | {d2['points']} pts | {d2['wins']} wins\n"
     )

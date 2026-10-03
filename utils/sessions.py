@@ -233,3 +233,49 @@ async def plan_jobs(scheduler, on_new=None) -> int:
                 planned += 1
     logger.info("sessions: planned %d collection job(s)", planned)
     return planned
+
+
+# --------------------------------------------------------------------------
+# Driver display data (names, teams, official team colours)
+# --------------------------------------------------------------------------
+
+_META_KEY = "driver_meta_v1"
+
+
+def _load_meta(year: int, rnd: int) -> dict:
+    """Blocking: driver code -> surname, team, team colour from F1 timing."""
+    for code in ("Q", "R", "FP3", "FP2", "FP1", "SQ", "S"):
+        try:
+            s = fastf1.get_session(year, rnd, code)
+            s.load(laps=False, telemetry=False, weather=False, messages=False)
+            res = s.results
+            if res is None or len(res) == 0:
+                continue
+            out = {}
+            for _, r in res.iterrows():
+                abbr = str(r.get("Abbreviation") or "")
+                if abbr:
+                    color = str(r.get("TeamColor") or "")
+                    out[abbr] = {
+                        "name": str(r.get("LastName") or abbr),
+                        "team": str(r.get("TeamName") or ""),
+                        "color": f"#{color}" if len(color) == 6 else "",
+                    }
+            if out:
+                return out
+        except Exception as e:
+            logger.info("driver meta: %s %s unavailable (%s)", rnd, code, e)
+    return {}
+
+
+async def driver_meta(year: int, rnd: int) -> dict:
+    cache = store.load(_META_KEY, {}) or {}
+    key = f"{year}-{rnd}"
+    if cache.get(key):
+        return cache[key]
+    meta = await asyncio.to_thread(_load_meta, year, rnd)
+    if meta:
+        cache = {k: v for k, v in cache.items() if k.startswith(f"{year}-")}  # this season only
+        cache[key] = meta
+        store.save(_META_KEY, cache)
+    return meta

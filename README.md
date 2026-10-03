@@ -27,6 +27,7 @@ BoxBox combines live timing data from [FastF1](https://github.com/theOehrly/Fast
 | `/rewind [circuit] [year]` | Relive the key moments and turning points of any past race |
 | `/result` | Latest race result — finishing order with gap times and concise DNF reasons |
 | `/follow [driver/team]` | Follow a driver or team so their breaking news is flagged for you (`/unfollow` to stop) |
+| `/grid` | Starting-grid graphic for this weekend: official qualifying order with reported grid penalties applied (provisional until the race), real team colours from F1 timing. Also sent automatically when you ask about the grid |
 | `/teammates` | Norris vs Piastri: points, qualifying and race head-to-heads, recent form, with a verdict |
 | `/title` | Championship maths: who is still mathematically alive and what McLaren needs from here |
 | `/pace` | McLaren race pace vs Mercedes, Ferrari and Red Bull over the last 3 races (upgrade watch, from FastF1 lap data) |
@@ -64,11 +65,17 @@ handlers/
   menu.py                 CallbackQuery router for the /race inline-button hub
   voice.py                Voice note → transcription → answer → spoken reply (send_voice_reply)
   photo.py                Photo/screenshot questions via a vision-capable model
+  grid_cmd.py             /grid and the auto-attached grid graphic
   mclaren_cmds.py         /teammates, /title, /pace, /debrief
 utils/
   f1_data.py              FastF1 wrappers, schedule helpers, Irish-time formatting
   groq_client.py          OpenRouter chat, speech-to-text and TTS (gpt-audio → edge-tts → gTTS fallback), token trimming
   mclaren.py              McLaren data layer (Jolpi): live snapshot, team-mate H2H, title maths, debrief, alert markers
+  grid.py                 Grid penalties (news → structured) and provisional starting grid
+  graphics.py             Pillow-drawn reply graphics (grid); data-driven, never AI-generated
+  sessions.py             Auto-collects every session from F1 live timing after it ends
+  news.py                 Rolling 48h news digest injected into answers
+  topic.py                Off-topic filter (F1 only)
   pace.py                 Race-pace comparison from FastF1 laps, cached
   convo.py                Per-chat conversation memory (last 6 exchanges, 6h expiry, persisted)
   tavily_client.py        Tavily search wrapper + result formatter
