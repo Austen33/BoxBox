@@ -83,8 +83,17 @@ def diagnostics() -> str:
         f"BoxBox {BOT_VERSION} | python {platform.python_version()} | up {mins // 60}h{mins % 60:02d}m\n"
         f"OPEN_ROUTER_KEY: {has('OPEN_ROUTER_KEY')} | TAVILY_API_KEY: {has('TAVILY_API_KEY')} | "
         f"TELEGRAM_CHAT_ID/ADMIN_CHAT_ID: {'set' if (os.environ.get('ADMIN_CHAT_ID') or os.environ.get('TELEGRAM_CHAT_ID')) else 'MISSING'}\n"
-        f"ffmpeg: {'found' if __import__('shutil').which('ffmpeg') else 'not found'}"
+        f"ffmpeg: {'found' if __import__('shutil').which('ffmpeg') else 'not found'}\n"
+        f"OPEN_ROUTER_KEY check: {_key_check()}"
     )
+
+
+def _key_check() -> str:
+    try:
+        from utils.groq_client import key_fingerprint
+        return key_fingerprint(os.environ.get("OPEN_ROUTER_KEY"))
+    except Exception as e:
+        return f"unavailable ({type(e).__name__})"
 
 
 def report(n: int = 5) -> str:

@@ -15,8 +15,48 @@ OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 _client: httpx.AsyncClient | None = None
 
 
+def clean_key(raw: str | None) -> str:
+    """Normalise a pasted API key: drops whitespace, quotes, invisible characters,
+    a leading "OPEN_ROUTER_KEY=" and a leading "Bearer "."""
+    key = (raw or "").strip()
+    if "=" in key and not key.startswith("sk-"):
+        key = key.split("=", 1)[1]
+    key = re.sub(r"^\s*bearer\s+", "", key.strip().strip("\"'"), flags=re.IGNORECASE)
+    # OpenRouter keys are ASCII letters, digits, '-' and '_' only.
+    return re.sub(r"[^A-Za-z0-9_-]", "", key)
+
+
+def key_fingerprint(raw: str | None) -> str:
+    """Safe description of the configured key for diagnostics (never the key)."""
+    if not raw:
+        return "MISSING"
+    key = clean_key(raw)
+    issues = []
+    if raw != raw.strip():
+        issues.append("leading/trailing whitespace")
+    if any(q in raw for q in "\"'"):
+        issues.append("quotes")
+    if "=" in raw:
+        issues.append("contains '='")
+    if re.search(r"(?i)bearer", raw):
+        issues.append("contains 'Bearer'")
+    if any(ord(c) > 127 for c in raw):
+        issues.append("non-ASCII/invisible characters")
+    if not key.startswith("sk-or-v1-"):
+        issues.append("doesn't start with sk-or-v1-")
+    if len(key) < 60:
+        issues.append("looks too short (cut off?)")
+    tail = key[-4:] if len(key) >= 12 else "?"
+    return (
+        f"raw length {len(raw)}, cleaned length {len(key)}, ends ...{tail}"
+        + (f", PROBLEMS: {', '.join(issues)}" if issues else ", format OK")
+    )
+
+
 def _api_key() -> str:
-    key = os.environ.get("OPEN_ROUTER_KEY")
+    # Tolerate common dashboard paste mistakes: surrounding whitespace/quotes,
+    # or the whole ".env" line ("OPEN_ROUTER_KEY=sk-...") pasted as the value.
+    key = clean_key(os.environ.get("OPEN_ROUTER_KEY"))
     if not key:
         raise RuntimeError(
             "OPEN_ROUTER_KEY environment variable is not set. "
