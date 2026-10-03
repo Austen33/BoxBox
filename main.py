@@ -126,6 +126,11 @@ async def errors_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     chat_id = update.effective_chat.id
     admin_set = get_admin_chat_id() is not None
     if admin_set and not is_admin(chat_id):
+        await update.message.reply_text(
+            f"/errors is admin-only. Your chat id is {chat_id}, which doesn't match the "
+            f"ADMIN_CHAT_ID / TELEGRAM_CHAT_ID set on the server. Set ADMIN_CHAT_ID={chat_id} "
+            f"there and redeploy."
+        )
         return
 
     arg = (context.args[0].lower() if context.args else "")
@@ -157,8 +162,10 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
     )
     try:
         if isinstance(update, Update) and update.effective_message is not None:
+            err = context.error
+            detail = errorlog.redact(f"{type(err).__name__}: {err}")[:300] if err else "unknown"
             await update.effective_message.reply_text(
-                "Something went wrong on my end. Try again in a moment."
+                f"Something went wrong on my end. Try again in a moment.\n\nError: {detail}"
             )
     except Exception:
         pass
