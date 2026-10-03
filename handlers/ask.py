@@ -1,8 +1,10 @@
 import asyncio
+import logging
 import re
 from telegram import Update
 from telegram.ext import ContextTypes
-from utils.groq_client import chat, SMART_MODEL
+from utils.groq_client import chat, SMART_MODEL, FAST_MODEL
+from utils import convo, mclaren
 from utils.tavily_client import search, format_search_results
 from utils.f1_data import (
     get_last_race_results_async,
@@ -14,6 +16,31 @@ from utils.f1_data import (
 )
 from utils.rate_limit import is_rate_limited
 from utils.telegram_safe import safe_reply
+
+logger = logging.getLogger(__name__)
+
+# McLaren-specific data blocks, pulled in when the question calls for them so
+# typed questions, follow-ups and voice notes all get the same depth as the
+# dedicated commands.
+TEAMMATE_KEYWORDS = [
+    "teammate", "team-mate", "team mate", "head to head", "head-to-head",
+    "intra-team", "lando or oscar", "oscar or lando", "norris vs", "piastri vs",
+    "norris or piastri", "piastri or norris", "who is faster", "who's faster",
+    "who is quicker", "who's quicker",
+]
+TITLE_KEYWORDS = [
+    "title", "mathematically", "clinch", "chance of winning the championship",
+    "chances", "catch antonelli", "catch the leader", "need to win",
+    "can norris", "can piastri", "can mclaren", "constructors",
+]
+PACE_KEYWORDS = [
+    "pace", "upgrade", "upgrades", "performance gap", "how quick", "how fast is the mclaren",
+    "mcl40", "faster than ferrari", "faster than mercedes", "closing the gap",
+]
+DEBRIEF_KEYWORDS = [
+    "debrief", "recap", "how did mclaren", "how did we do", "what happened to norris",
+    "what happened to piastri", "what went wrong", "how was the race",
+]
 
 STANDINGS_KEYWORDS = [
     "standings", "championship", "points", "who is leading", "who's leading",
@@ -61,7 +88,36 @@ async def _fetch_qualifying(query: str, query_lower: str) -> dict | None:
     return await asyncio.to_thread(get_qualifying_results, year, round_number)
 
 
-async def get_f1_response(query: str, for_voice: bool = False) -> str:
+async def _standalone_query(query: str, history: list[dict]) -> str:
+    """Turn a short follow-up ("and Piastri?") into a self-contained question."""
+    if not history or len(query.split()) > 14:
+        return query
+    transcript = "\n".join(f"{m['role']}: {m['content'][:400]}" for m in history[-6:])
+    prompt = (
+        "Rewrite the user's latest message as one self-contained Formula 1 question, "
+        "using the conversation for context (who 'he', 'they', 'that race' refer to). "
+        "If it already stands on its own, return it unchanged. Output only the question.\n\n"
+        f"Conversation:\n{transcript}\n\nLatest message: {query}"
+    )
+    try:
+        rewritten = (await chat(messages=[{"role": "user", "content": prompt}], model=FAST_MODEL, system="You rewrite questions.")).strip()
+        return rewritten if rewritten and len(rewritten) < 400 else query
+    except Exception:
+        return query
+
+
+async def _pace_text() -> str:
+    from utils.pace import pace_report
+    completed = sorted(await mclaren.get_completed_rounds())
+    if not completed:
+        return ""
+    return await asyncio.to_thread(pace_report, completed, 3)
+
+
+async def get_f1_response(query: str, for_voice: bool = False, history: list[dict] | None = None) -> str:
+    history = history or []
+    original_query = query
+    query = await _standalone_query(query, history)
     query_lower = query.lower()
     current_year = get_current_season()
     years = _extract_years(query)
@@ -136,6 +192,30 @@ async def get_f1_response(query: str, for_voice: bool = False) -> str:
                 f1_context += f"P{int(r['position'])}: {r['driver']} ({r['team']})\n"
             f1_context += "\n"
 
+    # McLaren data blocks (computed in code, so the model only narrates them).
+    asks_teammates = any(kw in query_lower for kw in TEAMMATE_KEYWORDS) or (
+        "norris" in query_lower and "piastri" in query_lower
+    )
+    asks_title = any(kw in query_lower for kw in TITLE_KEYWORDS)
+    asks_pace = any(kw in query_lower for kw in PACE_KEYWORDS)
+    asks_debrief = any(kw in query_lower for kw in DEBRIEF_KEYWORDS)
+    if not mentions_past_year:
+        try:
+            if asks_teammates:
+                f1_context += (await mclaren.teammates_text()) + "\n\n"
+            if asks_title:
+                f1_context += (await mclaren.title_text()) + "\n\n"
+            if asks_debrief:
+                _, debrief = await mclaren.debrief_text()
+                if debrief:
+                    f1_context += debrief + "\n\n"
+            if asks_pace:
+                pace = await _pace_text()
+                if pace:
+                    f1_context += pace + "\n\n"
+        except Exception:
+            logger.warning("McLaren context failed", exc_info=True)
+
     search_context = ""
     if needs_live_search:
         results = await search(f"F1 2026 {query}", max_results=8)
@@ -168,7 +248,8 @@ async def get_f1_response(query: str, for_voice: bool = False) -> str:
             if race_result_query and f1_context else ""
         )
 
-    prompt = f"""The user is asking: {query}
+    shown = original_query if original_query == query else f"{original_query} (meaning: {query})"
+    prompt = f"""The user is asking: {shown}
 
 {combined_context}
 
@@ -178,9 +259,17 @@ For historical or technical questions, draw on your training knowledge.
 Keep the answer concise and to the point. If you are not certain about something, say so.{formatting_instruction}"""
 
     return await chat(
-        messages=[{"role": "user", "content": prompt}],
+        messages=list(history) + [{"role": "user", "content": prompt}],
         model=SMART_MODEL,
     )
+
+
+async def answer_and_remember(chat_id: int, query: str, for_voice: bool = False) -> str:
+    """Answer with this chat's recent history, then store the exchange."""
+    history = convo.get_history(chat_id)
+    response = await get_f1_response(query, for_voice=for_voice, history=history)
+    convo.add_exchange(chat_id, query, response)
+    return response
 
 
 async def ask_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -195,5 +284,22 @@ async def ask_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     await update.message.reply_chat_action("typing")
-    response = await get_f1_response(query)
+    response = await answer_and_remember(update.effective_chat.id, query)
     await safe_reply(update.message, response)
+
+
+async def chat_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Plain (non-command) text in a private chat: a normal conversation."""
+    if not update.message or not update.message.text:
+        return
+    if is_rate_limited(update.effective_user.id):
+        await update.message.reply_text("Slow down — one question at a time.")
+        return
+    await update.message.reply_chat_action("typing")
+    response = await answer_and_remember(update.effective_chat.id, update.message.text)
+    await safe_reply(update.message, response)
+
+
+async def reset_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    convo.clear(update.effective_chat.id)
+    await update.message.reply_text("Fresh start. I've cleared our conversation.")

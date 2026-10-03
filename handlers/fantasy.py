@@ -2,7 +2,7 @@ import asyncio
 from telegram import Update
 from telegram.ext import ContextTypes
 from utils.f1_data import get_next_race_info, get_qualifying_results
-from utils.groq_client import chat, SMART_MODEL
+from utils.groq_client import chat, SMART_MODEL, MCLAREN_ANGLE
 from utils.tavily_client import search, format_search_results
 from utils.rate_limit import is_rate_limited
 from utils.telegram_safe import safe_reply
@@ -62,7 +62,7 @@ For each pick, give a brief reason. Think about:
 Don't hedge everything. Make actual recommendations with actual reasoning."""
 
     response = await chat(
-        messages=[{"role": "user", "content": prompt}],
+        messages=[{"role": "user", "content": prompt + MCLAREN_ANGLE}],
         model=SMART_MODEL,
     )
 

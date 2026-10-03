@@ -1,6 +1,6 @@
 from telegram import Update
 from telegram.ext import ContextTypes
-from utils.groq_client import chat, SMART_MODEL
+from utils.groq_client import chat, SMART_MODEL, MCLAREN_ANGLE
 from utils.tavily_client import search, format_search_results
 from utils.rate_limit import is_rate_limited
 from utils.telegram_safe import safe_reply
@@ -42,7 +42,7 @@ and don't downplay things that have actually been confirmed.
 If the search results don't give you much to work with, be honest about that rather than padding it out."""
 
     response = await chat(
-        messages=[{"role": "user", "content": prompt}],
+        messages=[{"role": "user", "content": prompt + MCLAREN_ANGLE}],
         model=SMART_MODEL,
     )
 

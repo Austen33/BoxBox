@@ -280,7 +280,34 @@ async def synthesize_speech(text: str) -> tuple[bytes, str]:
         return source_bytes, "mp3"
     return await _gtts_mp3(cleaned), "mp3"
 
-SYSTEM_PROMPT = """You are BoxBox, a Telegram F1 bot. You are a knowledgeable mate who follows F1 obsessively.
+SEASON_SNAPSHOT = """SEASON BACKGROUND (written 3 October 2026, after round 15 of the 2026 season). This is narrative background only. The LIVE DATA block and any live F1 data or search results in the conversation are newer and override it. For anything that may have changed since this date (results, standings, injuries, contracts, upgrades), say it may have moved on instead of stating it as current.
+
+The 2026 regulations:
+- New cars with revised aerodynamics, new power units with far more electrical power, and 100% sustainable fuel. Cars are smaller and lighter than 2025.
+- Audi (the old Sauber operation) and Cadillac joined the grid, so there are 11 teams and 22 race seats. McLaren is a Mercedes power unit customer.
+- Mercedes got the new rules right and has dominated.
+
+McLaren in 2026:
+- Car: MCL40. Team principal: Andrea Stella. Drivers: Lando Norris (reigning 2025 world champion, number 1 on his car) and Oscar Piastri.
+- Norris has won twice this season (Hungary and the Netherlands, both from pole). Piastri has not won yet, with podiums in Japan (P2) and Miami (P3). The gap between the two team-mates has been a talking point.
+- The season started badly. Piastri crashed on the way to the grid in Australia and did not start, and in China both cars had electrical problems before the race. Norris said the MCL40 lacked grip and downforce at Silverstone. A heavily upgraded MCL40 has been behind the recent form, with Norris winning from pole in Hungary and the Netherlands.
+- Before 2026 Stella said McLaren would simplify its team-mate racing rules (the "papaya rules") for Norris and Piastri.
+- Azerbaijan (round 15) was a bad weekend: Norris retired and Piastri finished 13th after starting third.
+
+Line-ups: Mercedes (Russell, Antonelli), Ferrari (Leclerc, Hamilton), Red Bull (Verstappen, Hadjar), Racing Bulls (Lawson, rookie Arvid Lindblad), Alpine (Gasly, Colapinto), Haas (Bearman, Ocon), Audi (Hulkenberg, Bortoleto), Williams (Sainz, Albon), Aston Martin (Alonso, Stroll), Cadillac (Bottas, Perez). Mercedes has dominated: Antonelli and Russell between them have won most of the races.
+
+Calendar:
+- The Bahrain and Saudi Arabian Grands Prix in March were called off because of conflict in the Middle East. Bahrain was rescheduled as the "Bahrain Grand Prix in Malaysia" at Sepang, Kuala Lumpur, on 4 October. Saudi Arabia was not replaced.
+- The season ends in Abu Dhabi on 6 December. Live standings, win counts and the next races are in the LIVE DATA block."""
+
+SYSTEM_PROMPT = """You are BoxBox, a Telegram bot for McLaren Racing fans. You follow Formula 1 obsessively, but McLaren is your team. You are a knowledgeable mate in papaya, not a neutral news desk.
+
+How McLaren changes your answers:
+- Put McLaren, Lando Norris and Oscar Piastri first. When someone asks about standings, results, a race or the championship, give the wider picture but make sure the McLaren angle is in it: where both cars finished, points scored, the gap to rivals, what it means for the constructors' fight.
+- Be a fan, not a cheerleader. Celebrate wins and good drives, but be straight about bad weekends, mistakes, strategy calls that went wrong and pace deficits. Never spin a result. Never put down rival drivers or teams, give them credit where it is earned.
+- Treat Norris and Piastri evenly. Do not pick a favourite or stir up a rivalry. Report the numbers and let them speak.
+- For non-McLaren questions, answer them properly and briefly. Do not force McLaren into an answer where it does not belong.
+- McLaren history is fair game: Senna, Prost, Hakkinen, Hamilton, Button, Norris, the 1988 season, the 2025 title, and so on. Same rule as everything else, only state history you are sure of.
 
 Rules for every response:
 - Write in plain, natural English. No textbook tone, no news article style.
@@ -288,55 +315,104 @@ Rules for every response:
 - Never use phrases like "it is worth noting", "dive into", "certainly", "delve", "it is important to note", "fascinatingly", "it's worth mentioning", "needless to say","genuinely".
 - Avoid unnecessary bullet lists. Use prose unless a list genuinely helps the reader.
 - Technical explanations should feel like a race engineer talking to a smart fan who wants to actually understand something, not just get a surface level answer.
-- Always be factual. If something is uncertain, say so clearly.
+- Always be factual. If something is uncertain, say so clearly. Never invent results, lap times, quotes, upgrades or team news.
 - Keep responses concise but complete. Do not pad answers with filler sentences.
 - Format for Telegram: use *bold* and _italic_ sparingly where it genuinely helps, keep paragraphs short.
 - Never recommend drivers or teams based on memory alone. Always treat driver and constructor information as potentially outdated and rely on the search context provided.
-- The current year is 2026. Always refer to the 2026 F1 season. If search results mention 2025, treat that as last season's data and flag it as such rather than presenting it as current."""
+- The current year is 2026. Always refer to the 2026 F1 season. If search results mention 2025, treat that as last season's data and flag it as such rather than presenting it as current.
+
+""" + SEASON_SNAPSHOT
+
+
+# Appended to the per-command prompts so every answer ends with the McLaren angle.
+MCLAREN_ANGLE = (
+    "\n\nFinish with one short line on what this means for McLaren (Norris and Piastri), "
+    "using only the information above. If there is no real McLaren angle, skip that line."
+)
+
+
+def _text_of(content) -> str:
+    """Plain-text view of a message body (str, or a multimodal part list)."""
+    if isinstance(content, str):
+        return content
+    return " ".join(p.get("text", "") for p in content if isinstance(p, dict) and p.get("type") == "text")
 
 
 def _estimate_tokens(text: str) -> int:
     return len(text) // 4
 
 
-def _trim_messages_to_limit(messages: list, token_limit: int = 8000) -> list:
-    total = sum(_estimate_tokens(m["content"]) for m in messages)
-    if total <= token_limit:
+def _trim_messages_to_limit(messages: list, token_limit: int = 30000) -> list:
+    """Keep the system prompt and latest message intact; drop oldest history first."""
+    def cost(m) -> int:
+        return _estimate_tokens(_text_of(m["content"]))
+
+    if sum(cost(m) for m in messages) <= token_limit or len(messages) <= 2:
         return messages
 
-    # Preserve system prompt (index 0) and last user message (index -1)
-    if len(messages) <= 2:
-        return messages
-
-    system_msg = messages[0]
-    user_msg = messages[-1]
-    reserved = _estimate_tokens(system_msg["content"]) + _estimate_tokens(user_msg["content"])
-    budget = token_limit - reserved
-
-    # Truncate the context message (middle messages or the user content if single-message)
-    middle = messages[1:-1]
-    trimmed = []
-    for msg in middle:
-        content = msg["content"]
-        allowed_chars = budget * 4
-        if allowed_chars <= 0:
-            break
-        trimmed.append({**msg, "content": content[:allowed_chars]})
-        budget -= _estimate_tokens(content[:allowed_chars])
-
-    return [system_msg] + trimmed + [user_msg]
+    system_msg, user_msg = messages[0], messages[-1]
+    budget = token_limit - cost(system_msg) - cost(user_msg)
+    kept: list = []
+    # Walk history newest-first so the oldest turns are the ones that fall off.
+    for msg in reversed(messages[1:-1]):
+        text = _text_of(msg["content"])
+        if not isinstance(msg["content"], str) or budget <= 0:
+            continue
+        allowed = max(budget, 0) * 4
+        if len(text) > allowed:
+            msg = {**msg, "content": text[:allowed]}
+        kept.append(msg)
+        budget -= cost(msg)
+    return [system_msg] + list(reversed(kept)) + [user_msg]
 
 
-async def chat(messages: list, model: str = SMART_MODEL, system: str = SYSTEM_PROMPT) -> str:
-    full_messages = [{"role": "system", "content": system}] + messages
+async def _system_with_live(system: str | None) -> str:
+    """Default system prompt plus the auto-refreshed standings block."""
+    if system is not None:
+        return system
+    from utils.mclaren import live_snapshot  # local import: avoids a cycle
+    live = await live_snapshot()
+    return f"{SYSTEM_PROMPT}\n\n{live}" if live else SYSTEM_PROMPT
+
+
+async def chat(messages: list, model: str = SMART_MODEL, system: str | None = None) -> str:
+    full_messages = [{"role": "system", "content": await _system_with_live(system)}] + messages
     full_messages = _trim_messages_to_limit(full_messages)
-    data = await _post({
-        "model": model,
-        "messages": full_messages,
-        "temperature": 0.7,
-        "max_tokens": 1024,
-    })
-    return data["choices"][0]["message"]["content"] or ""
+    max_tokens = 3000  # headroom: reasoning models spend part of this on thinking
+    for attempt in range(2):
+        data = await _post({
+            "model": model,
+            "messages": full_messages,
+            "temperature": 0.7,
+            "max_tokens": max_tokens,
+            "reasoning": {"effort": "low"},
+        })
+        choice = data["choices"][0]
+        text = choice["message"].get("content") or ""
+        if choice.get("finish_reason") != "length":
+            return text
+        logger.warning("%s hit max_tokens=%d (reply len %d)", model, max_tokens, len(text))
+        max_tokens *= 2
+    return text
+
+
+async def chat_vision(
+    prompt: str,
+    image_bytes: bytes,
+    mime: str = "image/jpeg",
+    history: list | None = None,
+    model: str = SMART_MODEL,
+) -> str:
+    """Answer a question about an image (photo/screenshot) with the main model."""
+    data_url = f"data:{mime};base64,{base64.b64encode(image_bytes).decode()}"
+    user_msg = {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": prompt},
+            {"type": "image_url", "image_url": {"url": data_url}},
+        ],
+    }
+    return await chat(messages=list(history or []) + [user_msg], model=model)
 
 
 async def transcribe_audio(audio_bytes: bytes, filename: str = "voice.ogg") -> str:

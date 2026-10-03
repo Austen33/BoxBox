@@ -2,7 +2,7 @@ import asyncio
 from telegram import Update
 from telegram.ext import ContextTypes
 from utils.f1_data import get_lap_data_for_strategy
-from utils.groq_client import chat, SMART_MODEL
+from utils.groq_client import chat, SMART_MODEL, MCLAREN_ANGLE
 from utils.tavily_client import search, format_search_results
 from utils.rate_limit import is_rate_limited
 from utils.telegram_safe import safe_reply
@@ -62,7 +62,7 @@ the tyre delta, when the safety car or VSC changed things if it did.
 Make this feel like proper analysis, not a Wikipedia summary."""
 
     response = await chat(
-        messages=[{"role": "user", "content": prompt}],
+        messages=[{"role": "user", "content": prompt + MCLAREN_ANGLE}],
         model=SMART_MODEL,
     )
 

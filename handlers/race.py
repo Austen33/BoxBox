@@ -1,7 +1,7 @@
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 from utils.f1_data import get_next_race_info
-from utils.groq_client import chat, FAST_MODEL
+from utils.groq_client import chat, FAST_MODEL, MCLAREN_ANGLE
 from utils.rate_limit import is_rate_limited
 from utils.telegram_safe import safe_reply
 
@@ -57,7 +57,7 @@ Do NOT add any commentary, predictions, or filler about the circuit or what to w
 Just give the race name, countdown, and session times. Nothing else."""
 
     response = await chat(
-        messages=[{"role": "user", "content": prompt}],
+        messages=[{"role": "user", "content": prompt + MCLAREN_ANGLE}],
         model=FAST_MODEL,
     )
 

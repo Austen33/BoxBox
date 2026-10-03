@@ -27,10 +27,17 @@ BoxBox combines live timing data from [FastF1](https://github.com/theOehrly/Fast
 | `/rewind [circuit] [year]` | Relive the key moments and turning points of any past race |
 | `/result` | Latest race result — finishing order with gap times and concise DNF reasons |
 | `/follow [driver/team]` | Follow a driver or team so their breaking news is flagged for you (`/unfollow` to stop) |
-| `/notify` | Toggle session reminders and breaking-news alerts |
-| Voice note | Send a voice message — it's transcribed with Whisper and answered like `/ask` |
+| `/teammates` | Norris vs Piastri: points, qualifying and race head-to-heads, recent form, with a verdict |
+| `/title` | Championship maths: who is still mathematically alive and what McLaren needs from here |
+| `/pace` | McLaren race pace vs Mercedes, Ferrari and Red Bull over the last 3 races (upgrade watch, from FastF1 lap data) |
+| `/debrief` | Spoken McLaren debrief of the last race (voice note plus text) |
+| `/reset` | Clear the conversation memory |
+| `/notify` | Toggle session reminders, McLaren qualifying/race result alerts and breaking-news alerts |
+| Plain text | In a private chat just type: follow-ups like "and Piastri?" work, using the last few exchanges |
+| Voice note | Transcribed and answered like a typed question (all the McLaren data above works by voice too) |
+| Photo / screenshot | Send an image (timing screen, graphic, post) with an optional caption and ask about it |
 
-Session reminders fire 30 minutes before each session begins. The breaking-news watcher polls a curated list of F1 outlets (formula1.com, autosport.com, motorsport.com, the-race.com, gpfans.com, planetf1.com, f1i.com) every 30 minutes and pushes anything matching the breaking-keyword list to subscribers.
+McLaren result alerts check for new qualifying/race results every 10 minutes and message `/notify` subscribers. The system prompt also gets an auto-refreshed standings block, so answers stay current without editing the prompt. Session reminders fire 30 minutes before each session begins. The breaking-news watcher polls a curated list of F1 outlets (formula1.com, autosport.com, motorsport.com, the-race.com, gpfans.com, planetf1.com, f1i.com) every 30 minutes and pushes anything matching the breaking-keyword list to subscribers.
 
 ---
 
@@ -55,10 +62,15 @@ handlers/
   notify.py               /notify subscriptions, session reminders, breaking-news poller
   result.py               /result — latest race finishing order + DNF reasons via Tavily
   menu.py                 CallbackQuery router for the /race inline-button hub
-  voice.py                Voice-message ingest → Whisper → /ask flow
+  voice.py                Voice note → transcription → answer → spoken reply (send_voice_reply)
+  photo.py                Photo/screenshot questions via a vision-capable model
+  mclaren_cmds.py         /teammates, /title, /pace, /debrief
 utils/
   f1_data.py              FastF1 wrappers, schedule helpers, Irish-time formatting
   groq_client.py          OpenRouter chat, speech-to-text and TTS (gpt-audio → edge-tts → gTTS fallback), token trimming
+  mclaren.py              McLaren data layer (Jolpi): live snapshot, team-mate H2H, title maths, debrief, alert markers
+  pace.py                 Race-pace comparison from FastF1 laps, cached
+  convo.py                Per-chat conversation memory (last 6 exchanges, 6h expiry, persisted)
   tavily_client.py        Tavily search wrapper + result formatter
   rate_limit.py           Per-user rate limiter
   telegram_safe.py        Safe reply helper (splits long messages for Telegram's 4096-char limit)

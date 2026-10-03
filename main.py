@@ -28,6 +28,9 @@ from handlers.result import result_handler
 from handlers.profile import driver_handler, team_handler
 from handlers.follow import follow_handler, unfollow_handler
 from handlers.menu import menu_callback_handler
+from handlers.mclaren_cmds import teammates_handler, title_handler, pace_handler, debrief_handler
+from handlers.photo import photo_handler
+from handlers.ask import chat_handler, reset_handler
 from utils.telegram_safe import safe_reply
 from utils.metrics import track
 
@@ -83,9 +86,14 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         "/rewind \\[circuit\\] \\[year\\] — relive key moments from any past race\n"
         "/result — latest race result with concise DNF reasons\n"
         "/follow \\[driver/team\\] — flag their breaking news (also /unfollow)\n"
-        "/notify — toggle session reminders and breaking news alerts\n"
+        "/teammates — Norris vs Piastri: the McLaren team-mate battle\n"
+        "/title — championship maths and what McLaren can still achieve\n"
+        "/pace — McLaren race pace vs Mercedes, Ferrari and Red Bull (upgrade watch)\n"
+        "/debrief — spoken McLaren debrief of the last race\n"
+        "/reset — clear our conversation\n"
+        "/notify — toggle session reminders, McLaren result alerts and breaking news\n"
         "\n"
-        "You can also send a *voice note* and I'll transcribe it and answer like an /ask query.\n\n"
+        "Or just chat: type a question (follow-ups work), send a *voice note*, or send a *photo or screenshot* and ask about it.\n\n"
         "Lights out and away we go."
     )
     await safe_reply(update.message, text)
@@ -143,6 +151,11 @@ async def post_init(application: Application) -> None:
         BotCommand("notify", "Toggle session reminders and breaking news"),
         BotCommand("rewind", "Relive key moments from a past race"),
         BotCommand("result", "Latest race result with DNF reasons"),
+        BotCommand("teammates", "Norris vs Piastri team-mate battle"),
+        BotCommand("title", "Championship maths for McLaren"),
+        BotCommand("pace", "McLaren race pace and upgrade watch"),
+        BotCommand("debrief", "Spoken McLaren debrief of the last race"),
+        BotCommand("reset", "Clear our conversation"),
     ]
     await application.bot.set_my_commands(commands)
     setup_scheduler(application)
@@ -190,6 +203,11 @@ def main() -> None:
         "team": team_handler,
         "follow": follow_handler,
         "unfollow": unfollow_handler,
+        "teammates": teammates_handler,
+        "title": title_handler,
+        "pace": pace_handler,
+        "debrief": debrief_handler,
+        "reset": reset_handler,
     }
     for name, handler in commands.items():
         application.add_handler(CommandHandler(name, track(name)(handler)))
@@ -200,6 +218,16 @@ def main() -> None:
 
     application.add_handler(
         MessageHandler(filters.VOICE, track("voice")(voice_handler))
+    )
+    application.add_handler(
+        MessageHandler(filters.PHOTO, track("photo")(photo_handler))
+    )
+    # Plain text in private chats is a normal conversation (with memory).
+    application.add_handler(
+        MessageHandler(
+            filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE,
+            track("chat")(chat_handler),
+        )
     )
     # Race-weekend hub inline buttons (callback_data starts with "hub:").
     application.add_handler(

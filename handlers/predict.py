@@ -2,7 +2,7 @@ import asyncio
 from telegram import Update
 from telegram.ext import ContextTypes
 from utils.f1_data import get_qualifying_results, get_next_race_info, get_current_season
-from utils.groq_client import chat, SMART_MODEL
+from utils.groq_client import chat, SMART_MODEL, MCLAREN_ANGLE
 from utils.tavily_client import search, format_search_results
 from utils.rate_limit import is_rate_limited
 from utils.telegram_safe import safe_reply
@@ -60,7 +60,7 @@ whether anyone behind has the pace to challenge, whether there's a wildcard.
 Be honest if it's hard to call."""
 
     response = await chat(
-        messages=[{"role": "user", "content": prompt}],
+        messages=[{"role": "user", "content": prompt + MCLAREN_ANGLE}],
         model=SMART_MODEL,
     )
 

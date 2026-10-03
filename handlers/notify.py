@@ -15,7 +15,7 @@ from utils.rate_limit import is_rate_limited
 from utils.tavily_client import search
 from utils.groq_client import chat, FAST_MODEL
 from utils.telegram_safe import safe_send
-from utils import store
+from utils import store, mclaren
 from handlers.follow import match_follows
 
 logger = logging.getLogger(__name__)
@@ -83,8 +83,16 @@ def setup_scheduler(application: Application) -> None:
         id="news_check",
         replace_existing=True,
     )
+    # McLaren session alerts (qualifying and race results) every 10 minutes.
+    _scheduler.add_job(
+        _check_mclaren_sessions,
+        trigger=IntervalTrigger(minutes=10),
+        args=[application],
+        id="mclaren_sessions",
+        replace_existing=True,
+    )
     _scheduler.start()
-    logger.info("Session reminder scheduler started (news checks every 30min).")
+    logger.info("Scheduler started (news checks every 30min, McLaren result alerts every 10min).")
 
 
 def _schedule_all_reminders(application: Application) -> None:
@@ -224,6 +232,54 @@ News:
         logger.error(f"Error checking breaking news: {e}")
 
 
+_MCLAREN_STATE_KEY = "mclaren_alert_state"
+
+
+async def _check_mclaren_sessions(application: Application) -> None:
+    """Push a McLaren-angled alert when new qualifying or race results appear."""
+    try:
+        markers = await mclaren.latest_session_markers()
+        if not any(markers.values()):
+            return
+        state = store.load(_MCLAREN_STATE_KEY, None)
+        if not isinstance(state, dict):
+            # First run: record where we are so we don't replay old sessions.
+            store.save(_MCLAREN_STATE_KEY, markers)
+            return
+
+        alerts = []
+        # Race first (a new race round also implies its quali is old news).
+        if markers["race"] > state.get("race", 0):
+            name, data = await mclaren.debrief_text()
+            if data:
+                prompt = f"""{data}
+
+Write a McLaren post-race alert for a Telegram chat: 3 to 4 short sentences. Lead with how Norris and Piastri
+finished and the points scored, then the championship impact. Be honest if it was a bad day.
+Use only the facts above."""
+                alerts.append(f"🏁 *{name}: McLaren result*\n\n" + await chat(
+                    messages=[{"role": "user", "content": prompt}], model=FAST_MODEL))
+        elif markers["quali"] > state.get("quali", 0):
+            name, data = await mclaren.quali_alert_text()
+            if data:
+                prompt = f"""{data}
+
+Write a McLaren qualifying alert for a Telegram chat in 2 to 3 short sentences: where Norris and Piastri
+start and how far off pole they are. Be honest if it went badly. Use only the facts above."""
+                alerts.append(f"⏱ *{name}: qualifying*\n\n" + await chat(
+                    messages=[{"role": "user", "content": prompt}], model=FAST_MODEL))
+
+        # Persist before sending so a send failure can't cause a repeat storm.
+        store.save(_MCLAREN_STATE_KEY, markers)
+        for text in alerts:
+            for chat_id in list(_subscribers):
+                await safe_send(application.bot, chat_id, text)
+        if alerts:
+            logger.info("Sent %d McLaren alert(s) to %d subscriber(s)", len(alerts), len(_subscribers))
+    except Exception:
+        logger.exception("McLaren session check failed")
+
+
 async def subscribe_core(message, chat_id: int) -> None:
     """Add-only subscribe used by the race-weekend hub button. Idempotent."""
     if chat_id in _subscribers:
@@ -236,7 +292,7 @@ async def subscribe_core(message, chat_id: int) -> None:
     await message.reply_text(
         "Reminders on. You'll get:\n"
         "• 30-min alerts before each session\n"
-        "• Breaking F1 news as it happens\n\n"
+        "• McLaren qualifying and race result alerts\n• Breaking F1 news as it happens\n\n"
         "Use /notify again to turn them off."
     )
 
@@ -261,6 +317,6 @@ async def notify_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await update.message.reply_text(
             "Reminders on. You'll get:\n"
             "• 30-min alerts before each session\n"
-            "• Breaking F1 news as it happens\n\n"
+            "• McLaren qualifying and race result alerts\n• Breaking F1 news as it happens\n\n"
             "Use /notify again to turn them off."
         )

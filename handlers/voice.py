@@ -6,9 +6,30 @@ from telegram.ext import ContextTypes
 from utils.groq_client import transcribe_audio, synthesize_speech
 from utils.rate_limit import is_rate_limited
 from utils.telegram_safe import safe_reply
-from handlers.ask import get_f1_response
+from handlers.ask import answer_and_remember
 
 logger = logging.getLogger(__name__)
+
+
+async def send_voice_reply(message, text: str, caption: str | None = None) -> bool:
+    """Speak ``text`` as a Telegram voice note. Returns False if it couldn't be sent."""
+    try:
+        tts_bytes, tts_fmt = await synthesize_speech(text)
+    except Exception:
+        logger.exception("TTS synthesis failed")
+        return False
+    try:
+        buf = io.BytesIO(tts_bytes)
+        if tts_fmt == "ogg":
+            await message.reply_voice(voice=InputFile(buf, filename="response.ogg"), caption=caption)
+        else:
+            await message.reply_audio(
+                audio=InputFile(buf, filename="response.mp3"), title="BoxBox", caption=caption
+            )
+        return True
+    except Exception:
+        logger.exception("Telegram audio send failed")
+        return False
 
 
 async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -35,34 +56,12 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             await update.message.reply_text("Couldn't make out what you said. Try again?")
             return
 
-        response = await get_f1_response(transcript, for_voice=True)
+        response = await answer_and_remember(update.effective_chat.id, transcript, for_voice=True)
 
         await update.message.reply_chat_action("record_voice")
 
-        tts_bytes: bytes | None = None
-        tts_fmt = "ogg"
-        try:
-            tts_bytes, tts_fmt = await synthesize_speech(response)
-        except Exception:
-            logger.exception("TTS synthesis failed — falling back to text")
-
-        if tts_bytes:
-            try:
-                buf = io.BytesIO(tts_bytes)
-                if tts_fmt == "ogg":
-                    await update.message.reply_voice(
-                        voice=InputFile(buf, filename="response.ogg"),
-                        caption=f'"{transcript}"',
-                    )
-                else:
-                    await update.message.reply_audio(
-                        audio=InputFile(buf, filename="response.mp3"),
-                        title="BoxBox",
-                        caption=f'"{transcript}"',
-                    )
-                return
-            except Exception:
-                logger.exception("Telegram audio send failed — falling back to text")
+        if await send_voice_reply(update.message, response, caption=f'"{transcript}"'):
+            return
 
         full_reply = f'_You said: "{transcript}"_\n\n{response}'
         await safe_reply(update.message, full_reply)
