@@ -16,7 +16,7 @@ from telegram.ext import ContextTypes
 from utils.f1_data import get_current_season, STANDINGS_TTL
 from utils.groq_client import chat, SMART_MODEL
 from utils.rate_limit import is_rate_limited
-from utils.telegram_safe import safe_reply
+from utils.telegram_safe import stream_reply
 from utils.http import get_json
 from handlers.history import (
     JOLPI_BASE,
@@ -238,9 +238,9 @@ async def driver_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     prompt = f"""{card}
 
 In 2-3 sentences, give a punchy scouting-report read on this driver: their reputation, current form, and what they're known for. No filler, no preamble, talk like a race engineer to a smart fan."""
-    blurb = await chat(messages=[{"role": "user", "content": prompt}], model=SMART_MODEL)
-
-    await safe_reply(update.message, f"{card}\n\n{blurb}")
+    await stream_reply(update.message, lambda on_text: chat(
+        messages=[{"role": "user", "content": prompt}], model=SMART_MODEL, on_text=on_text,
+    ), prefix=f"{card}\n\n")
 
 
 async def team_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -304,6 +304,6 @@ async def team_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     prompt = f"""{card}
 
 In 2-3 sentences, give a punchy read on this F1 team's current situation: their form this season, strengths/weaknesses, and trajectory. No filler, no preamble, talk like a race engineer to a smart fan."""
-    blurb = await chat(messages=[{"role": "user", "content": prompt}], model=SMART_MODEL)
-
-    await safe_reply(update.message, f"{card}\n\n{blurb}")
+    await stream_reply(update.message, lambda on_text: chat(
+        messages=[{"role": "user", "content": prompt}], model=SMART_MODEL, on_text=on_text,
+    ), prefix=f"{card}\n\n")

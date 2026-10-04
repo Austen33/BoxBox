@@ -13,9 +13,9 @@ from apscheduler.triggers.interval import IntervalTrigger
 from utils.f1_data import get_event_schedule, get_current_season, IRISH_TZ, UTC_TZ
 from utils.rate_limit import is_rate_limited
 from utils.tavily_client import search
-from utils.groq_client import chat, FAST_MODEL
+from utils.groq_client import chat, chat_json, tidy, FAST_MODEL
 from utils.telegram_safe import safe_send
-from utils import store, mclaren
+from utils import predictions, store, mclaren
 from handlers.follow import match_follows
 
 logger = logging.getLogger(__name__)
@@ -172,6 +172,14 @@ def _mark_seen(news_hash: str) -> None:
     _persist_seen_news()
 
 
+_NEWS_SCHEMA = {
+    "type": "object",
+    "properties": {"newsworthy": {"type": "boolean"}, "summary": {"type": "string"}},
+    "required": ["newsworthy", "summary"],
+    "additionalProperties": False,
+}
+
+
 async def _check_breaking_news(application: Application) -> None:
     """Periodically check for breaking F1 news and push to subscribers."""
     if not _subscribers:
@@ -217,13 +225,23 @@ async def _check_breaking_news(application: Application) -> None:
             for item in breaking_items[:3]  # Limit to top 3
         ])
 
-        prompt = f"""Summarize these breaking F1 news items in 2-3 sentences max.
-Be concise and factual. Focus on the key announcement or development.
+        prompt = f"""These F1 news items matched breaking-news keywords:
 
-News:
-{news_text}"""
+{news_text}
 
-        summary = await chat(messages=[{"role": "user", "content": prompt}], model=FAST_MODEL)
+newsworthy: true only if at least one item is a genuine new announcement or development (signing,
+contract, penalty, team change, injury, regulation decision, official confirmation). False for opinion
+pieces, previews, explainers, rumours presented as rumours, or old news.
+summary: if newsworthy, 2 to 3 short factual sentences on the key development, in UK English with no
+em or en dashes; otherwise an empty string."""
+
+        verdict = await chat_json(
+            [{"role": "user", "content": prompt}], _NEWS_SCHEMA, "breaking_news",
+        )
+        if not verdict.get("newsworthy") or not verdict.get("summary"):
+            logger.info("Breaking-news candidates judged not newsworthy; nothing pushed")
+            return
+        summary = tidy(verdict["summary"])
 
         # Send to all subscribers, flagging items that mention a followed
         # driver/team so /follow users see why it's relevant to them.
@@ -270,6 +288,10 @@ async def _session_alert_text(year: int, rnd: int, code: str, result: dict) -> s
     text = f"{icon} *{result['event']}: {what}*\n_Provisional, from live timing_\n\n{table}"
     if mcl:
         text += f"\n\nMcLaren: {', '.join(mcl)}"
+    if code == "R":
+        scored = predictions.score_line(year, rnd, [r["driver"] for r in rows])
+        if scored:
+            text += f"\n\n🔮 {scored}"
 
     facts = "\n".join(line(r) for r in rows)
     if code == "R":

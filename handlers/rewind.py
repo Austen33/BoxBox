@@ -5,7 +5,7 @@ from utils.f1_data import resolve_round, get_race_rewind_data
 from utils.groq_client import chat, SMART_MODEL
 from utils.tavily_client import search, format_search_results
 from utils.rate_limit import is_rate_limited
-from utils.telegram_safe import safe_reply
+from utils.telegram_safe import stream_reply
 
 
 async def rewind_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -67,8 +67,9 @@ If the {year} race happened:
 Write it like you're telling a mate who missed it. No filler. Under 200 words.
 
 If the {year} race did NOT happen, just state that fact in one sentence. Nothing else."""
-            response = await chat(messages=[{"role": "user", "content": prompt}], model=SMART_MODEL)
-            await safe_reply(update.message, f"*{circuit_input.title()} GP {year}, Rewind*\n\n{response}")
+            await stream_reply(update.message, lambda on_text: chat(
+                messages=[{"role": "user", "content": prompt}], model=SMART_MODEL, on_text=on_text,
+            ), prefix=f"*{circuit_input.title()} GP {year}, Rewind*\n\n")
             return
 
         await update.message.reply_text(
@@ -146,6 +147,6 @@ Write a concise race rewind for a hardcore F1 fan. Rules:
 - Under 250 words
 - Write like you're telling a mate who missed it what happened, not like a Wikipedia article"""
 
-    response = await chat(messages=[{"role": "user", "content": prompt}], model=SMART_MODEL)
-
-    await safe_reply(update.message, f"*{race_name} {year}, Rewind*\n\n{response}")
+    await stream_reply(update.message, lambda on_text: chat(
+        messages=[{"role": "user", "content": prompt}], model=SMART_MODEL, on_text=on_text,
+    ), prefix=f"*{race_name} {year}, Rewind*\n\n")

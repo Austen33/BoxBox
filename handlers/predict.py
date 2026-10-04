@@ -1,4 +1,6 @@
 import asyncio
+import logging
+
 from telegram import Update
 from telegram.ext import ContextTypes
 from utils.f1_data import get_qualifying_results, get_next_race_info, get_current_season
@@ -6,6 +8,9 @@ from utils.groq_client import chat, SMART_MODEL, MCLAREN_ANGLE
 from utils.tavily_client import search, format_search_results
 from utils.rate_limit import is_rate_limited
 from utils.telegram_safe import stream_reply
+from utils import predictions
+
+logger = logging.getLogger(__name__)
 
 
 async def run_predict(message, user_id: int) -> None:
@@ -59,12 +64,20 @@ Don't just say "pole sitter will win" - actually think about whether the race te
 whether anyone behind has the pace to challenge, whether there's a wildcard.
 Be honest if it's hard to call."""
 
-    await stream_reply(message, lambda on_text: chat(
+    text = await stream_reply(message, lambda on_text: chat(
         messages=[{"role": "user", "content": prompt + MCLAREN_ANGLE}],
         model=SMART_MODEL,
         effort="medium",
         on_text=on_text,
     ))
+
+    # Keep the podium call so the race-result alert can score it.
+    if next_race and str(next_race.get("round", "")).isdigit():
+        codes = [r["abbreviation"] for r in (qual_data or {}).get("results", []) if r.get("abbreviation")]
+        try:
+            await predictions.save_from_text(year, int(next_race["round"]), text, codes)
+        except Exception:
+            logger.warning("Saving /predict podium failed", exc_info=True)
 
 
 async def predict_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

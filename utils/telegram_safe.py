@@ -156,13 +156,20 @@ class StreamingReply:
 async def stream_reply(
     message: Message,
     produce: Callable[[Callable[[str], Awaitable[None]]], Awaitable[str]],
+    prefix: str = "",
 ) -> str:
-    """Run ``produce(on_text)`` (a chat call) and stream its reply into the chat."""
+    """Run ``produce(on_text)`` (a chat call) and stream its reply into the chat.
+    ``prefix`` (a header or data card) is shown above the reply; the return value
+    is the reply alone."""
     sr = StreamingReply(message)
+
+    async def on_text(text: str) -> None:
+        await sr.update(prefix + text)
+
     try:
-        text = await produce(sr.update)
+        text = await produce(on_text)
     except Exception:
         await sr.fail()
         raise
-    await sr.finish(text)
+    await sr.finish(prefix + text)
     return text

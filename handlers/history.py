@@ -4,7 +4,7 @@ from telegram.ext import ContextTypes
 from utils.groq_client import chat, SMART_MODEL
 from utils.tavily_client import search, format_search_results
 from utils.rate_limit import is_rate_limited
-from utils.telegram_safe import safe_reply
+from utils.telegram_safe import stream_reply
 from utils.http import get_json
 
 JOLPI_BASE = "https://api.jolpi.ca/ergast/f1"
@@ -293,8 +293,9 @@ Search results:
 
 Summarize the driver's historical performance at this circuit in 3-4 sentences.
 Include wins, podiums, notable moments, and general form."""
-            response = await chat(messages=[{"role": "user", "content": prompt}], model=SMART_MODEL)
-            await safe_reply(update.message, response)
+            await stream_reply(update.message, lambda on_text: chat(
+                messages=[{"role": "user", "content": prompt}], model=SMART_MODEL, on_text=on_text,
+            ))
             return
 
         await update.message.reply_text(
@@ -332,8 +333,9 @@ Include wins, podiums, notable moments, and general form."""
 Give a 2-3 sentence analysis of this driver's form at this circuit.
 What patterns do you see? Any standout performances or struggles?"""
 
-    response = await chat(messages=[{"role": "user", "content": prompt}], model=SMART_MODEL)
-    await safe_reply(update.message, f"{text}{summary}\n\n{response}")
+    await stream_reply(update.message, lambda on_text: chat(
+        messages=[{"role": "user", "content": prompt}], model=SMART_MODEL, on_text=on_text,
+    ), prefix=f"{text}{summary}\n\n")
 
 
 async def career_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -382,8 +384,9 @@ Provide a career overview in 4-5 sentences covering:
 2. Total wins and podiums
 3. Teams driven for
 4. Notable achievements or records"""
-            response = await chat(messages=[{"role": "user", "content": prompt}], model=SMART_MODEL)
-            await safe_reply(update.message, response)
+            await stream_reply(update.message, lambda on_text: chat(
+                messages=[{"role": "user", "content": prompt}], model=SMART_MODEL, on_text=on_text,
+            ))
             return
 
         await update.message.reply_text(f"Couldn't fetch career data for {driver_input}.")
@@ -408,5 +411,6 @@ Provide a brief 3-4 sentence career narrative:
 2. Any standout achievements or patterns?
 3. Career trajectory (rising, peak, veteran)?"""
 
-    response = await chat(messages=[{"role": "user", "content": prompt}], model=SMART_MODEL)
-    await safe_reply(update.message, f"{text}\n\n{response}")
+    await stream_reply(update.message, lambda on_text: chat(
+        messages=[{"role": "user", "content": prompt}], model=SMART_MODEL, on_text=on_text,
+    ), prefix=f"{text}\n\n")

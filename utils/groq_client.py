@@ -128,6 +128,8 @@ SMART_MODEL = os.getenv("SMART_MODEL", "anthropic/claude-sonnet-5.5")
 # Photos/screenshots. Defaults to the smart model, which accepts images.
 VISION_MODEL = os.getenv("VISION_MODEL", SMART_MODEL)
 STT_MODEL = os.getenv("STT_MODEL", "google/gemini-3.5-flash-lite")
+# Video clips (onboards, replays, GIFs). Needs a model that accepts video input.
+VIDEO_MODEL = os.getenv("VIDEO_MODEL", "google/gemini-3.8-flash")
 # Extra failover models (comma-separated), tried before the other tier's model.
 FALLBACK_MODELS = [m.strip() for m in os.getenv("FALLBACK_MODELS", "").split(",") if m.strip()]
 TTS_MODEL = os.getenv("TTS_MODEL", "openai/gpt-audio-mini")
@@ -450,7 +452,9 @@ def _supports_cache_control(model: str) -> bool:
 async def _system_message(system: str | None, extra_system: str | None, model: str) -> dict:
     """System message: the fixed prompt first, then the auto-refreshed live data
     and news. Each part gets a prompt-cache breakpoint, so the long fixed prompt
-    (plus the tool definitions ahead of it) is only billed in full once."""
+    (plus the tool definitions ahead of it) is only billed in full once. The fixed
+    part is cached for an hour so it survives quiet spells between messages; the
+    live part changes often, so it keeps the default five minutes."""
     if system is not None:
         static, dynamic = system, ""
     else:
@@ -461,10 +465,32 @@ async def _system_message(system: str | None, extra_system: str | None, model: s
         dynamic = "\n\n".join(p for p in (live, news) if p)
     if not _supports_cache_control(model):
         return {"role": "system", "content": "\n\n".join(p for p in (static, dynamic) if p)}
-    parts = [{"type": "text", "text": static, "cache_control": {"type": "ephemeral"}}]
+    parts = [{"type": "text", "text": static, "cache_control": {"type": "ephemeral", "ttl": "1h"}}]
     if dynamic:
         parts.append({"type": "text", "text": dynamic, "cache_control": {"type": "ephemeral"}})
     return {"role": "system", "content": parts}
+
+
+def _cache_history(convo: list, model: str) -> list:
+    """Put a cache breakpoint on the latest user message, so the conversation so
+    far is read from cache on the next tool round and the next turn. (The system
+    message holds two breakpoints; the limit is four.)"""
+    if not _supports_cache_control(model):
+        return convo
+    for i in range(len(convo) - 1, 0, -1):
+        msg = convo[i]
+        if msg.get("role") != "user":
+            continue
+        content = msg["content"]
+        if isinstance(content, str):
+            parts = [{"type": "text", "text": content}]
+        else:
+            parts = [dict(p) for p in content]
+        if not parts:
+            return convo
+        parts[-1]["cache_control"] = {"type": "ephemeral"}
+        return convo[:i] + [{**msg, "content": parts}] + convo[i + 1:]
+    return convo
 
 
 _US_TO_UK = {
@@ -634,7 +660,6 @@ async def chat(
     system: str | None = None,
     *,
     effort: str = "low",
-    temperature: float = 0.7,
     tools: list[Tool] | None = None,
     extra_system: str | None = None,
     on_text: OnText | None = None,
@@ -650,7 +675,7 @@ async def chat(
     on_text: async callback given the reply so far while it streams.
     """
     convo = [await _system_message(system, extra_system, model)] + list(messages)
-    convo = _trim_messages_to_limit(convo)
+    convo = _cache_history(_trim_messages_to_limit(convo), model)
     registry = {t.name: t for t in tools or []}
     max_tokens = 3000  # headroom: reasoning models spend part of this on thinking
     rounds = 0
@@ -659,7 +684,6 @@ async def chat(
         payload = {
             "model": model,
             "messages": convo,
-            "temperature": temperature,
             "max_tokens": max_tokens,
             "reasoning": {"effort": effort},
         }
@@ -714,9 +738,11 @@ async def chat_json(
     data = await _post({
         "model": model,
         "messages": [{"role": "system", "content": system}] + list(messages),
-        "temperature": 0,
         "max_tokens": 3000,
         "reasoning": {"effort": effort},
+        # Only route to providers that honour every parameter, so the schema is
+        # never silently ignored.
+        "provider": {"require_parameters": True},
         "response_format": {
             "type": "json_schema",
             "json_schema": {"name": name, "strict": True, "schema": schema},
@@ -728,6 +754,12 @@ async def chat_json(
 def image_part(image_bytes: bytes, mime: str = "image/jpeg") -> dict:
     data_url = f"data:{mime};base64,{base64.b64encode(image_bytes).decode()}"
     return {"type": "image_url", "image_url": {"url": data_url}}
+
+
+def video_part(video_bytes: bytes, mime: str = "video/mp4") -> dict:
+    """A video clip, for a model that accepts video input (VIDEO_MODEL)."""
+    data_url = f"data:{mime};base64,{base64.b64encode(video_bytes).decode()}"
+    return {"type": "video_url", "video_url": {"url": data_url}}
 
 
 def pdf_part(pdf_bytes: bytes, filename: str = "document.pdf") -> dict:

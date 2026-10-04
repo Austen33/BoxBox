@@ -32,7 +32,7 @@ from handlers.mclaren_cmds import teammates_handler, title_handler, pace_handler
 from handlers.photo import photo_handler
 from handlers.grid_cmd import grid_handler
 from handlers.ask import chat_handler, reset_handler, me_handler
-from handlers.photo import pdf_handler
+from handlers.photo import pdf_handler, video_handler
 from handlers.stewards import stewards_handler
 from utils.telegram_safe import safe_reply
 from utils.metrics import track
@@ -102,7 +102,7 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         "/me - what I remember about you (favourite driver, fantasy team); /me clear to forget\n"
         "/notify - toggle session reminders, live results after each session and breaking news\n"
         "\n"
-        "Or just chat: type a question (follow-ups work), send a *voice note*, or send a *photo or screenshot* (timing screens and F1 Fantasy teams too) or a *PDF* and ask about it.\n\n"
+        "Or just chat: type a question (follow-ups work), send a *voice note*, or send a *photo or screenshot* (timing screens and F1 Fantasy teams too), a *video clip* or a *PDF* and ask about it.\n\n"
         "Lights out and away we go."
     )
     await safe_reply(update.message, text)
@@ -139,6 +139,7 @@ async def models_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         f"Smart (chat, /ask, analysis): {g.SMART_MODEL} ({src('SMART_MODEL')})\n"
         f"Fast (short lookups, rewrites): {g.FAST_MODEL} ({src('FAST_MODEL')})\n"
         f"Vision (photos, PDFs): {g.VISION_MODEL} ({src('VISION_MODEL')})\n"
+        f"Video clips: {g.VIDEO_MODEL} ({src('VIDEO_MODEL')})\n"
         f"Failover: {', '.join(g.FALLBACK_MODELS) or 'none extra'} ({src('FALLBACK_MODELS')}), "
         "then the other tier's model\n"
         f"Speech-to-text: {g.STT_MODEL} ({src('STT_MODEL')})\n"
@@ -313,6 +314,12 @@ def main() -> None:
     )
     application.add_handler(
         MessageHandler(filters.Document.PDF, track("pdf")(pdf_handler))
+    )
+    application.add_handler(
+        MessageHandler(
+            filters.VIDEO | filters.VIDEO_NOTE | filters.ANIMATION | filters.Document.VIDEO,
+            track("video")(video_handler),
+        )
     )
     # Plain text in private chats is a normal conversation (with memory).
     application.add_handler(

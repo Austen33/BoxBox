@@ -10,7 +10,7 @@ from handlers.voice import send_voice_reply
 from utils import mclaren
 from utils.groq_client import chat, SMART_MODEL
 from utils.rate_limit import is_rate_limited
-from utils.telegram_safe import safe_reply
+from utils.telegram_safe import safe_reply, stream_reply
 
 logger = logging.getLogger(__name__)
 
@@ -38,8 +38,9 @@ async def teammates_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 Write a tight verdict on the McLaren team-mate battle in 3 to 5 sentences: who is ahead, by how much,
 where the gap comes from (qualifying, race pace, reliability and bad luck count separately) and whether it is closing.
 Treat both drivers fairly. {_RULES}"""
-    verdict = await chat(messages=[{"role": "user", "content": prompt}], model=SMART_MODEL)
-    await safe_reply(update.message, f"*Norris vs Piastri*\n\n{data}\n\n{verdict}")
+    await stream_reply(update.message, lambda on_text: chat(
+        messages=[{"role": "user", "content": prompt}], model=SMART_MODEL, on_text=on_text,
+    ), prefix=f"*Norris vs Piastri*\n\n{data}\n\n")
 
 
 async def title_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -51,8 +52,9 @@ async def title_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 Explain McLaren's championship position in 4 to 6 sentences: what is realistically still possible in the drivers'
 and constructors' titles, and what McLaren should be targeting from here. The "needed average" figures are
 projections, say so. {_RULES}"""
-    verdict = await chat(messages=[{"role": "user", "content": prompt}], model=SMART_MODEL, effort="medium")
-    await safe_reply(update.message, f"*Title maths*\n\n{data}\n\n{verdict}")
+    await stream_reply(update.message, lambda on_text: chat(
+        messages=[{"role": "user", "content": prompt}], model=SMART_MODEL, effort="medium", on_text=on_text,
+    ), prefix=f"*Title maths*\n\n{data}\n\n")
 
 
 async def pace_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -71,8 +73,9 @@ async def pace_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 Read this like a race engineer: is McLaren's race pace improving or getting worse relative to Mercedes, Ferrari
 and Red Bull, and what does it say about the upgrades? 3 to 5 sentences. The trend covers only a few races
 at different circuits, so don't overstate it. {_RULES}"""
-    verdict = await chat(messages=[{"role": "user", "content": prompt}], model=SMART_MODEL, effort="medium")
-    await safe_reply(update.message, f"*Pace and upgrades*\n\n{data}\n\n{verdict}")
+    await stream_reply(update.message, lambda on_text: chat(
+        messages=[{"role": "user", "content": prompt}], model=SMART_MODEL, effort="medium", on_text=on_text,
+    ), prefix=f"*Pace and upgrades*\n\n{data}\n\n")
 
 
 async def debrief_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

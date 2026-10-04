@@ -6,7 +6,7 @@ from telegram.ext import ContextTypes
 from handlers.ask import user_context
 from utils import convo
 from utils.f1_tools import TOOL_RULES, f1_tools
-from utils.groq_client import chat_attachment, image_part, pdf_part
+from utils.groq_client import VIDEO_MODEL, VISION_MODEL, chat_attachment, image_part, pdf_part, video_part
 from utils.http import get_session
 from utils.rate_limit import is_rate_limited
 from utils.telegram_safe import stream_reply
@@ -40,7 +40,18 @@ technical directive), say what it decides and why it matters. Use your tools for
 cover. Keep it concise. If it has nothing to do with Formula 1 or motorsport, reply in one sentence that you're an
 F1 bot and only answer F1 questions."""
 
+_DEFAULT_VIDEO_QUESTION = "What happens in this clip, and what does it mean for the race or for McLaren?"
+
+_VIDEO_PROMPT = """The user sent a video clip (an onboard, a replay, a broadcast clip or a social post) with this message: {question}
+
+Describe only what you can actually see and hear, then answer. Identify cars by livery, car number and any on-screen
+graphics, not by guesswork. For incidents, say who was where and what happened, and give a view on likely steward
+action without stating it as fact. For current results, standings or anything else not in the clip, use your tools.
+Keep it concise. If the clip has nothing to do with Formula 1 or motorsport, don't describe it; reply in one sentence
+that you're an F1 bot and only answer F1 questions."""
+
 _MAX_PDF_BYTES = 15 * 1024 * 1024
+_MAX_VIDEO_BYTES = 20 * 1024 * 1024  # Telegram's bot download limit
 
 
 async def _download(context: ContextTypes.DEFAULT_TYPE, file_id: str) -> bytes:
@@ -50,12 +61,13 @@ async def _download(context: ContextTypes.DEFAULT_TYPE, file_id: str) -> bytes:
         return await resp.read()
 
 
-async def _answer(update: Update, prompt: str, attachment: dict, remembered_as: str) -> None:
+async def _answer(update: Update, prompt: str, attachment: dict, remembered_as: str,
+                  model: str = VISION_MODEL) -> None:
     msg = update.message
     chat_id, user_id = update.effective_chat.id, update.effective_user.id
     response = await stream_reply(msg, lambda on_text: chat_attachment(
         user_context(user_id) + prompt, attachment,
-        history=convo.get_history(chat_id),
+        history=convo.get_history(chat_id), model=model,
         tools=f1_tools(user_id), extra_system=TOOL_RULES,
         effort="medium", on_text=on_text,
     ))
@@ -110,3 +122,30 @@ async def pdf_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     except Exception:
         logger.exception("PDF handler error")
         await msg.reply_text("Couldn't read that PDF. Try sending it again.")
+
+
+async def video_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Video clips, round video notes, GIFs and videos sent as files, read by VIDEO_MODEL."""
+    msg = update.message
+    if not msg:
+        return
+    clip = msg.video or msg.video_note or msg.animation or msg.document
+    if clip is None:
+        return
+    if is_rate_limited(update.effective_user.id):
+        await msg.reply_text("Slow down, one question at a time.")
+        return
+    if (clip.file_size or 0) > _MAX_VIDEO_BYTES:
+        await msg.reply_text("That clip is too big for me, send one under 20 MB.")
+        return
+
+    await msg.reply_chat_action("typing")
+    try:
+        body = await _download(context, clip.file_id)
+        mime = getattr(clip, "mime_type", None) or "video/mp4"
+        question = (msg.caption or "").strip() or _DEFAULT_VIDEO_QUESTION
+        await _answer(update, _VIDEO_PROMPT.format(question=question), video_part(body, mime),
+                      f"[sent a video clip] {question}", model=VIDEO_MODEL)
+    except Exception:
+        logger.exception("Video handler error")
+        await msg.reply_text("Couldn't watch that clip. Try a shorter one, or ask in text.")
