@@ -5,8 +5,12 @@ import logging
 import os
 import re
 import shutil
+from dataclasses import dataclass
+from typing import Awaitable, Callable
 
 import httpx
+
+from utils.metrics import record_llm
 
 logger = logging.getLogger(__name__)
 
@@ -81,8 +85,23 @@ def _headers() -> dict:
     }
 
 
+def _with_fallbacks(payload: dict) -> dict:
+    """Add OpenRouter's `models` failover list: if the primary model errors or has
+    been retired, the request moves to the next one instead of failing."""
+    payload = {**payload, "usage": {"include": True}}  # token counts and cost, for /stats
+    model = payload.get("model")
+    if not model or "models" in payload:
+        return payload
+    chain: list[str] = []
+    for m in [model, *FALLBACK_MODELS, SMART_MODEL, FAST_MODEL]:
+        if m and m not in chain:
+            chain.append(m)
+    return {**payload, "models": chain[:3]}
+
+
 async def _post(payload: dict, attempts: int = 3) -> dict:
     """POST a chat completion to OpenRouter, retrying on 429/5xx."""
+    payload = _with_fallbacks(payload)
     delay = 1.0
     for attempt in range(attempts):
         resp = await _get_client().post(OPENROUTER_URL, headers=_headers(), json=payload)
@@ -98,6 +117,7 @@ async def _post(payload: dict, attempts: int = 3) -> dict:
         data = resp.json()
         if "error" in data:
             raise RuntimeError(f"OpenRouter error: {data['error']}")
+        record_llm(data.get("usage"))
         return data
     raise RuntimeError("OpenRouter request failed")
 
@@ -108,6 +128,8 @@ SMART_MODEL = os.getenv("SMART_MODEL", "anthropic/claude-sonnet-5.5")
 # Photos/screenshots. Defaults to the smart model, which accepts images.
 VISION_MODEL = os.getenv("VISION_MODEL", SMART_MODEL)
 STT_MODEL = os.getenv("STT_MODEL", "google/gemini-3.5-flash-lite")
+# Extra failover models (comma-separated), tried before the other tier's model.
+FALLBACK_MODELS = [m.strip() for m in os.getenv("FALLBACK_MODELS", "").split(",") if m.strip()]
 TTS_MODEL = os.getenv("TTS_MODEL", "openai/gpt-audio-mini")
 # gpt-audio voices: alloy, ash, ballad, coral, echo, sage, shimmer, verse, marin, cedar
 TTS_VOICE = os.getenv("TTS_VOICE", "cedar")
@@ -396,7 +418,7 @@ def _estimate_tokens(text: str) -> int:
     return len(text) // 4
 
 
-def _trim_messages_to_limit(messages: list, token_limit: int = 30000) -> list:
+def _trim_messages_to_limit(messages: list, token_limit: int = 100000) -> list:
     """Keep the system prompt and latest message intact; drop oldest history first."""
     def cost(m) -> int:
         return _estimate_tokens(_text_of(m["content"]))
@@ -420,14 +442,29 @@ def _trim_messages_to_limit(messages: list, token_limit: int = 30000) -> list:
     return [system_msg] + list(reversed(kept)) + [user_msg]
 
 
-async def _system_with_live(system: str | None) -> str:
-    """Default system prompt plus the auto-refreshed standings block."""
+def _supports_cache_control(model: str) -> bool:
+    # OpenAI models cache automatically; Anthropic and Gemini need explicit breakpoints.
+    return model.startswith(("anthropic/", "google/"))
+
+
+async def _system_message(system: str | None, extra_system: str | None, model: str) -> dict:
+    """System message: the fixed prompt first, then the auto-refreshed live data
+    and news. Each part gets a prompt-cache breakpoint, so the long fixed prompt
+    (plus the tool definitions ahead of it) is only billed in full once."""
     if system is not None:
-        return system
-    from utils.mclaren import live_snapshot  # local imports: avoid a cycle
-    from utils.news import latest_news
-    live, news = await asyncio.gather(live_snapshot(), latest_news())
-    return "\n\n".join(p for p in (SYSTEM_PROMPT, live, news) if p)
+        static, dynamic = system, ""
+    else:
+        from utils.mclaren import live_snapshot  # local imports: avoid a cycle
+        from utils.news import latest_news
+        live, news = await asyncio.gather(live_snapshot(), latest_news())
+        static = "\n\n".join(p for p in (SYSTEM_PROMPT, extra_system) if p)
+        dynamic = "\n\n".join(p for p in (live, news) if p)
+    if not _supports_cache_control(model):
+        return {"role": "system", "content": "\n\n".join(p for p in (static, dynamic) if p)}
+    parts = [{"type": "text", "text": static, "cache_control": {"type": "ephemeral"}}]
+    if dynamic:
+        parts.append({"type": "text", "text": dynamic, "cache_control": {"type": "ephemeral"}})
+    return {"role": "system", "content": parts}
 
 
 _US_TO_UK = {
@@ -467,25 +504,236 @@ def tidy(text: str) -> str:
     return _US_RE.sub(_uk_word, text)
 
 
-async def chat(messages: list, model: str = SMART_MODEL, system: str | None = None) -> str:
-    full_messages = [{"role": "system", "content": await _system_with_live(system)}] + messages
-    full_messages = _trim_messages_to_limit(full_messages)
+@dataclass
+class Tool:
+    """A function the model may call. ``fn`` takes the JSON arguments as keyword
+    arguments and returns text for the model to read."""
+    name: str
+    description: str
+    parameters: dict
+    fn: Callable[..., Awaitable[str]]
+
+    def spec(self) -> dict:
+        return {"type": "function", "function": {
+            "name": self.name, "description": self.description, "parameters": self.parameters,
+        }}
+
+
+OnText = Callable[[str], Awaitable[None]]
+
+_TOOL_RESULT_LIMIT = 20000  # characters per tool result
+
+
+async def _run_tool(call: dict, tools: dict[str, Tool]) -> str:
+    fn = call.get("function") or {}
+    tool = tools.get(fn.get("name", ""))
+    if tool is None:
+        return f"Unknown tool {fn.get('name')!r}."
+    try:
+        args = json.loads(fn.get("arguments") or "{}") or {}
+    except json.JSONDecodeError:
+        return "Tool arguments were not valid JSON."
+    try:
+        result = await tool.fn(**args)
+    except TypeError as e:
+        return f"Bad arguments for {tool.name}: {e}"
+    except Exception as e:
+        logger.warning("tool %s failed", tool.name, exc_info=True)
+        return f"{tool.name} failed: {type(e).__name__}. Answer without it."
+    logger.info("tool %s(%s) -> %d chars", tool.name, fn.get("arguments"), len(result or ""))
+    return (result or "No data.")[:_TOOL_RESULT_LIMIT]
+
+
+def _merge_reasoning(acc: list[dict], deltas: list[dict]) -> None:
+    """Stitch streamed reasoning_details fragments back into whole blocks, so they
+    can be passed back to the model on the next tool round."""
+    for d in deltas:
+        idx = d.get("index")
+        target = None
+        if idx is not None:
+            target = next((x for x in acc if x.get("index") == idx), None)
+        elif acc and acc[-1].get("type") == d.get("type"):
+            target = acc[-1]
+        if target is None:
+            acc.append(dict(d))
+            continue
+        for k, v in d.items():
+            if k in ("text", "summary", "data") and isinstance(v, str):
+                target[k] = (target.get(k) or "") + v
+            elif v is not None:
+                target[k] = v
+
+
+async def _post_stream(payload: dict, on_text: OnText, attempts: int = 3) -> dict:
+    """Streamed completion. Calls ``on_text`` with the reply so far as it arrives
+    and returns the assembled response in the same shape as ``_post``."""
+    payload = _with_fallbacks({**payload, "stream": True})
+    delay = 1.0
+    for attempt in range(attempts):
+        content, finish, model, usage = "", None, payload.get("model"), None
+        calls: dict[int, dict] = {}
+        reasoning: list[dict] = []
+        async with _get_client().stream(
+            "POST", OPENROUTER_URL, headers=_headers(), json=payload
+        ) as resp:
+            if resp.status_code in (429, 500, 502, 503, 504) and attempt < attempts - 1:
+                logger.warning("OpenRouter %s, retrying in %.0fs", resp.status_code, delay)
+                await asyncio.sleep(delay)
+                delay *= 2
+                continue
+            if resp.status_code >= 400:
+                body = (await resp.aread()).decode(errors="replace")
+                raise RuntimeError(
+                    f"OpenRouter HTTP {resp.status_code} for model {payload.get('model')}: {body[:300]}"
+                )
+            async for line in resp.aiter_lines():
+                if not line.startswith("data:"):
+                    continue
+                data = line[5:].strip()
+                if not data or data == "[DONE]":
+                    continue
+                try:
+                    chunk = json.loads(data)
+                except json.JSONDecodeError:
+                    continue
+                if "error" in chunk:
+                    raise RuntimeError(f"OpenRouter error: {chunk['error']}")
+                model = chunk.get("model", model)
+                usage = chunk.get("usage") or usage
+                for choice in chunk.get("choices", []):
+                    delta = choice.get("delta") or {}
+                    if delta.get("content"):
+                        content += delta["content"]
+                        await on_text(tidy(content))
+                    for tc in delta.get("tool_calls") or []:
+                        slot = calls.setdefault(tc.get("index", 0), {
+                            "id": "", "type": "function", "function": {"name": "", "arguments": ""},
+                        })
+                        if tc.get("id"):
+                            slot["id"] = tc["id"]
+                        fn = tc.get("function") or {}
+                        slot["function"]["name"] += fn.get("name") or ""
+                        slot["function"]["arguments"] += fn.get("arguments") or ""
+                    if delta.get("reasoning_details"):
+                        _merge_reasoning(reasoning, delta["reasoning_details"])
+                    if choice.get("finish_reason"):
+                        finish = choice["finish_reason"]
+        message: dict = {"role": "assistant", "content": content}
+        if calls:
+            message["tool_calls"] = [calls[i] for i in sorted(calls)]
+        if reasoning:
+            message["reasoning_details"] = reasoning
+        record_llm(usage)
+        return {"model": model, "usage": usage, "choices": [{"message": message, "finish_reason": finish}]}
+    raise RuntimeError("OpenRouter request failed")
+
+
+async def chat(
+    messages: list,
+    model: str = SMART_MODEL,
+    system: str | None = None,
+    *,
+    effort: str = "low",
+    temperature: float = 0.7,
+    tools: list[Tool] | None = None,
+    extra_system: str | None = None,
+    on_text: OnText | None = None,
+    max_tool_rounds: int = 4,
+) -> str:
+    """Chat completion with the BoxBox system prompt.
+
+    effort: reasoning effort ("minimal", "low", "medium", "high"); spend more on
+      analysis (/predict, /strategy) and less on rewrites and classification.
+    tools: functions the model may call to fetch data before answering; rounds
+      run until it answers, and the last round forces a text answer.
+    extra_system: static instructions appended to the cached system prompt.
+    on_text: async callback given the reply so far while it streams.
+    """
+    convo = [await _system_message(system, extra_system, model)] + list(messages)
+    convo = _trim_messages_to_limit(convo)
+    registry = {t.name: t for t in tools or []}
     max_tokens = 3000  # headroom: reasoning models spend part of this on thinking
-    for attempt in range(2):
-        data = await _post({
+    rounds = 0
+    retried_length = False
+    while True:
+        payload = {
             "model": model,
-            "messages": full_messages,
-            "temperature": 0.7,
+            "messages": convo,
+            "temperature": temperature,
             "max_tokens": max_tokens,
-            "reasoning": {"effort": "low"},
-        })
+            "reasoning": {"effort": effort},
+        }
+        if registry:
+            payload["tools"] = [t.spec() for t in registry.values()]
+            if rounds >= max_tool_rounds:
+                payload["tool_choice"] = "none"
+        data = await (_post_stream(payload, on_text) if on_text else _post(payload))
         choice = data["choices"][0]
-        text = choice["message"].get("content") or ""
-        if choice.get("finish_reason") != "length":
-            return tidy(text)
-        logger.warning("%s hit max_tokens=%d (reply len %d)", model, max_tokens, len(text))
-        max_tokens *= 2
-    return tidy(text)
+        message = choice["message"]
+        calls = message.get("tool_calls") or []
+        if calls and registry and rounds < max_tool_rounds:
+            rounds += 1
+            turn = {"role": "assistant", "content": message.get("content") or "", "tool_calls": calls}
+            if message.get("reasoning_details"):
+                turn["reasoning_details"] = message["reasoning_details"]
+            results = await asyncio.gather(*(_run_tool(c, registry) for c in calls))
+            convo += [turn] + [
+                {"role": "tool", "tool_call_id": c.get("id", ""), "content": r}
+                for c, r in zip(calls, results)
+            ]
+            continue
+        text = message.get("content") or ""
+        if choice.get("finish_reason") == "length" and not retried_length:
+            logger.warning("%s hit max_tokens=%d (reply len %d)", model, max_tokens, len(text))
+            max_tokens *= 2
+            retried_length = True
+            continue
+        return tidy(text)
+
+
+def _json_from(text: str) -> dict:
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        m = re.search(r"\{.*\}", text or "", re.DOTALL)
+        if not m:
+            raise ValueError(f"model returned no JSON: {text[:200]!r}")
+        return json.loads(m.group(0))
+
+
+async def chat_json(
+    messages: list,
+    schema: dict,
+    name: str,
+    model: str = FAST_MODEL,
+    system: str = "You extract structured data. Output JSON only.",
+    effort: str = "minimal",
+) -> dict:
+    """Structured output: the reply is constrained to ``schema`` (strict JSON
+    schema, so every property must be listed in ``required``)."""
+    data = await _post({
+        "model": model,
+        "messages": [{"role": "system", "content": system}] + list(messages),
+        "temperature": 0,
+        "max_tokens": 3000,
+        "reasoning": {"effort": effort},
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {"name": name, "strict": True, "schema": schema},
+        },
+    })
+    return _json_from(data["choices"][0]["message"].get("content") or "")
+
+
+def image_part(image_bytes: bytes, mime: str = "image/jpeg") -> dict:
+    data_url = f"data:{mime};base64,{base64.b64encode(image_bytes).decode()}"
+    return {"type": "image_url", "image_url": {"url": data_url}}
+
+
+def pdf_part(pdf_bytes: bytes, filename: str = "document.pdf") -> dict:
+    """A PDF the model reads directly (text, tables and layout)."""
+    data_url = f"data:application/pdf;base64,{base64.b64encode(pdf_bytes).decode()}"
+    return {"type": "file", "file": {"filename": filename, "file_data": data_url}}
 
 
 async def chat_vision(
@@ -494,17 +742,23 @@ async def chat_vision(
     mime: str = "image/jpeg",
     history: list | None = None,
     model: str = VISION_MODEL,
+    **kwargs,
 ) -> str:
-    """Answer a question about an image (photo/screenshot) with the vision model."""
-    data_url = f"data:{mime};base64,{base64.b64encode(image_bytes).decode()}"
-    user_msg = {
-        "role": "user",
-        "content": [
-            {"type": "text", "text": prompt},
-            {"type": "image_url", "image_url": {"url": data_url}},
-        ],
-    }
-    return await chat(messages=list(history or []) + [user_msg], model=model)
+    """Answer a question about an image (photo/screenshot) with the vision model.
+    Extra keyword arguments (tools, effort, on_text...) go to ``chat``."""
+    return await chat_attachment(prompt, image_part(image_bytes, mime), history, model, **kwargs)
+
+
+async def chat_attachment(
+    prompt: str,
+    attachment: dict,
+    history: list | None = None,
+    model: str = VISION_MODEL,
+    **kwargs,
+) -> str:
+    """Answer a question about an attached image or PDF content part."""
+    user_msg = {"role": "user", "content": [{"type": "text", "text": prompt}, attachment]}
+    return await chat(messages=list(history or []) + [user_msg], model=model, **kwargs)
 
 
 async def transcribe_audio(audio_bytes: bytes, filename: str = "voice.ogg") -> str:

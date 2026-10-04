@@ -3,7 +3,7 @@ from telegram.ext import ContextTypes
 from utils.groq_client import chat, SMART_MODEL, MCLAREN_ANGLE
 from utils.tavily_client import search, format_search_results
 from utils.rate_limit import is_rate_limited
-from utils.telegram_safe import safe_reply
+from utils.telegram_safe import stream_reply
 
 
 async def rumour_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -41,9 +41,8 @@ Label these clearly within your response. Don't sensationalise things that are j
 and don't downplay things that have actually been confirmed.
 If the search results don't give you much to work with, be honest about that rather than padding it out."""
 
-    response = await chat(
+    await stream_reply(update.message, lambda on_text: chat(
         messages=[{"role": "user", "content": prompt + MCLAREN_ANGLE}],
         model=SMART_MODEL,
-    )
-
-    await safe_reply(update.message, response)
+        on_text=on_text,
+    ))

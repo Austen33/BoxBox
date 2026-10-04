@@ -1,14 +1,14 @@
 """Grid penalties and the provisional starting grid for the current race weekend.
 
 Penalties aren't in any results feed until the race has been run, so during a
-race weekend this searches F1 news for penalty reports, has the fast model
-extract them as structured data, and applies them to the official qualifying
-order to give a provisional starting grid. Cached for a couple of hours and
+race weekend this reads the FIA's own documents (each PDF read once by the model
+and cached as text) plus F1 news reports, extracts the penalties as structured data, and
+applies them to the official qualifying order to give a provisional starting
+grid. Cached for a couple of hours and
 only active between the first session of the weekend and the race.
 """
 
 import asyncio
-import json
 import logging
 import re
 import time
@@ -57,20 +57,64 @@ async def _search(race_name: str) -> list[dict]:
     return items
 
 
-async def _extract(race_name: str, items: list[dict], codes: list[str]) -> list[dict]:
-    from utils.groq_client import chat, FAST_MODEL
+_PENALTY_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "penalties": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "driver": {"type": "string", "description": "3-letter driver code"},
+                    "places": {"type": "integer", "description": "grid places dropped (0 if back of grid / pit lane)"},
+                    "back_of_grid": {"type": "boolean"},
+                    "pit_lane": {"type": "boolean"},
+                    "reason": {"type": "string"},
+                },
+                "required": ["driver", "places", "back_of_grid", "pit_lane", "reason"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["penalties"],
+    "additionalProperties": False,
+}
+
+# FIA document titles that can carry a grid penalty for this weekend's race.
+_FIA_GRID_WORDS = ("starting grid", "power unit", "pu element", "gearbox", "grid", "impeding", "pit lane")
+
+
+async def _fia_docs(race_name: str) -> str:
+    """Summaries of this weekend's FIA documents that may carry grid penalties."""
+    from utils import fia
+
+    data = await fia.list_documents()
+    if not fia.matches(data["event"], race_name):
+        return ""
+    relevant = [d for d in data["docs"] if any(w in d["title"].lower() for w in _FIA_GRID_WORDS)]
+    # An official starting grid already includes every penalty, so it alone is enough.
+    final = [d for d in relevant if "starting grid" in d["title"].lower()]
+    docs = final[:1] or relevant[:8]
+    return await fia.summaries_text(docs) if docs else ""
+
+
+async def _extract(race_name: str, items: list[dict], codes: list[str], docs: str) -> list[dict]:
+    from utils.groq_client import FAST_MODEL, chat_json
 
     snippets = "\n".join(
         f"- {r.get('title', '')}: {' '.join((r.get('content') or '').split())[:500]}" for r in items[:12]
-    )
-    raw = await chat(
-        messages=[{"role": "user", "content": _EXTRACT_PROMPT.format(
-            race=race_name, codes=", ".join(codes), snippets=snippets)}],
+    ) or "(none)"
+    prompt = _EXTRACT_PROMPT.format(race=race_name, codes=", ".join(codes), snippets=snippets)
+    if docs:
+        prompt += ("\n\nOfficial FIA documents for this event (where they cover a driver, they override "
+                   "the news snippets):\n" + docs)
+    data = await chat_json(
+        messages=[{"role": "user", "content": prompt}],
+        schema=_PENALTY_SCHEMA,
+        name="grid_penalties",
         model=FAST_MODEL,
-        system="You extract structured data from news. Output valid JSON only.",
+        system="You extract grid penalties from F1 news and FIA documents. Output JSON only.",
     )
-    m = re.search(r"\{.*\}", raw, re.DOTALL)
-    data = json.loads(m.group(0)) if m else {"penalties": []}
     out = []
     for p in data.get("penalties", []):
         code = str(p.get("driver", "")).upper().strip()
@@ -96,8 +140,16 @@ async def penalties(race_name: str, codes: list[str]) -> list[dict]:
         if entry and time.time() - entry["ts"] < REFRESH_SECONDS:
             return entry["penalties"]
         try:
-            items = await _search(race_name)
-            found = await _extract(race_name, items, codes) if items else []
+            items, docs = await asyncio.gather(
+                _search(race_name), _fia_docs(race_name), return_exceptions=True)
+            if isinstance(docs, Exception):
+                logger.warning("FIA grid documents failed: %s", docs)
+                docs = ""
+            if isinstance(items, Exception):
+                if not docs:
+                    raise items
+                items = []
+            found = await _extract(race_name, items, codes, docs) if (items or docs) else []
             _cache[race_name] = {"ts": time.time(), "penalties": found}
             return found
         except KeyError:
@@ -136,7 +188,7 @@ async def grid_block(race_name: str, quali_rows: list[dict]) -> str:
         return ""
     pens = await penalties(race_name, codes)
     if not pens:
-        return ("Grid penalties: none found in news reports so far (the FIA confirms the official "
+        return ("Grid penalties: none found in FIA documents or news reports so far (the FIA confirms the official "
                 "starting grid before the race).")
     desc = "; ".join(
         f"{p['driver']} {'pit-lane start' if p['pit_lane'] else 'back of grid' if p['places'] == BACK_OF_GRID else str(p['places']) + ' places'}"
@@ -145,7 +197,7 @@ async def grid_block(race_name: str, quali_rows: list[dict]) -> str:
     )
     grid = apply_penalties(codes, pens)
     return (
-        f"Grid penalties (reported by F1 news sites): {desc}.\n"
+        f"Grid penalties (from FIA documents and F1 news): {desc}.\n"
         "Provisional starting grid after penalties (computed from the official qualifying order; "
         "the FIA's official grid can differ slightly): "
         + ", ".join(f"P{i + 1} {d}" for i, d in enumerate(grid))

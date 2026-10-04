@@ -1,283 +1,65 @@
-import asyncio
 import logging
-import re
 from telegram import Update
 from telegram.ext import ContextTypes
-from utils.groq_client import chat, SMART_MODEL, FAST_MODEL
-from utils import convo, mclaren, topic
-from utils.tavily_client import search, format_search_results
-from utils.f1_data import (
-    get_last_race_results_async,
-    get_driver_standings,
-    get_constructor_standings,
-    get_qualifying_results,
-    get_current_season,
-    resolve_round,
-)
+from utils.groq_client import chat, SMART_MODEL
+from utils import convo, userprefs
+from utils.f1_tools import TOOL_RULES, f1_tools
 from utils.rate_limit import is_rate_limited
-from utils.telegram_safe import safe_reply
+from utils.telegram_safe import safe_reply, stream_reply
 
 logger = logging.getLogger(__name__)
 
-# McLaren-specific data blocks, pulled in when the question calls for them so
-# typed questions, follow-ups and voice notes all get the same depth as the
-# dedicated commands.
-TEAMMATE_KEYWORDS = [
-    "teammate", "team-mate", "team mate", "head to head", "head-to-head",
-    "intra-team", "lando or oscar", "oscar or lando", "norris vs", "piastri vs",
-    "norris or piastri", "piastri or norris", "who is faster", "who's faster",
-    "who is quicker", "who's quicker",
-]
-TITLE_KEYWORDS = [
-    "title", "mathematically", "clinch", "chance of winning the championship",
-    "chances", "catch antonelli", "catch the leader", "need to win",
-    "can norris", "can piastri", "can mclaren", "constructors",
-]
-PACE_KEYWORDS = [
-    "pace", "upgrade", "upgrades", "performance gap", "how quick", "how fast is the mclaren",
-    "mcl40", "faster than ferrari", "faster than mercedes", "closing the gap",
-]
-DEBRIEF_KEYWORDS = [
-    "debrief", "recap", "how did mclaren", "how did we do", "what happened to norris",
-    "what happened to piastri", "what went wrong", "how was the race",
-]
-
-STANDINGS_KEYWORDS = [
-    "standings", "championship", "points", "who is leading", "who's leading",
-    "results", "last race", "most recent race", "most recent", "recent race",
-    "winner", "who won", "podium", "race result",
-]
-
-QUALI_KEYWORDS = [
-    "quali", "qualifying", "qualified", "pole", "front row", "q3", "grid",
-]
-
-# Words that signal the user wants up-to-date / current-season information.
-CURRENT_SIGNALS = [
-    "latest", "recent", "now", "current", "today", "this week", "this season",
-    "upcoming", "next race", "so far", "right now",
-]
-
-# Words that imply a live web search is genuinely needed (news, transfers,
-# paddock talk). Deliberately excludes ultra-generic terms like
-# "driver"/"team"/"best"/"season" that used to fire Tavily on pure-history
-# questions ("who's the best driver ever").
-LIVE_KEYWORDS = [
-    "news", "rumour", "rumor", "update", "just",
-    "announce", "announced", "signed", "confirmed", "breaking",
-    "lineup", "transfer", "contract", "fantasy",
-]
-
-_RACE_RESULT_KEYWORDS = [
-    "last race", "most recent race", "most recent", "recent race",
-    "race result", "podium", "who won", "winner",
-]
+VOICE_RULES = (
+    "\n\n(This reply will be spoken as a voice note. Two to four short sentences, about 60 words at most. "
+    "Answer the question in the first sentence. Talk like a person, not a document: contractions, "
+    "short sentences, no lists, no markdown or symbols. Say 'Formula One' not 'F1', 'fifth' not 'P5', "
+    "and say numbers the way you'd speak them. No intro and no sign-off.)"
+)
 
 
-def _extract_years(query: str) -> list[int]:
-    return [int(y) for y in re.findall(r"\b(?:19|20)\d{2}\b", query)]
+def user_context(user_id: int | None) -> str:
+    """What we've saved about this user, as a preface for their message."""
+    facts = userprefs.describe(user_id) if user_id else ""
+    return f"(What you know about this user from earlier chats:\n{facts})\n\n" if facts else ""
 
 
-async def _fetch_qualifying(query: str, query_lower: str) -> dict | None:
-    """Fetch real qualifying results, resolving a named circuit if the query
-    contains one, otherwise the most recent completed qualifying session."""
-    year_match = re.search(r"\b(19|20)\d{2}\b", query)
-    year = int(year_match.group(0)) if year_match else get_current_season()
-
-    round_number = await resolve_round(year, query)
-    if round_number is None and year == get_current_season():
-        wk = await mclaren.current_weekend(year)
-        round_number = int(wk["round"]) if wk else None
-
-    # Official classification from Jolpi first. FastF1's live-timing order can be
-    # wrong or incomplete right after a session, so it's only the fallback.
-    if round_number is not None:
-        official = await mclaren.qualifying_results(year, round_number)
-        if official:
-            return official
-    return await asyncio.to_thread(get_qualifying_results, year, round_number)
-
-
-async def _standalone_query(query: str, history: list[dict]) -> str:
-    """Turn a short follow-up ("and Piastri?") into a self-contained question."""
-    if not history or len(query.split()) > 14:
-        return query
-    transcript = "\n".join(f"{m['role']}: {m['content'][:400]}" for m in history[-6:])
-    prompt = (
-        "Rewrite the user's latest message as one self-contained Formula 1 question, "
-        "using the conversation for context (who 'he', 'they', 'that race' refer to). "
-        "If it already stands on its own, return it unchanged. Output only the question.\n\n"
-        f"Conversation:\n{transcript}\n\nLatest message: {query}"
-    )
-    try:
-        rewritten = (await chat(messages=[{"role": "user", "content": prompt}], model=FAST_MODEL, system="You rewrite questions.")).strip()
-        return rewritten if rewritten and len(rewritten) < 400 else query
-    except Exception:
-        return query
-
-
-async def _pace_text() -> str:
-    from utils.pace import pace_report
-    completed = sorted(await mclaren.get_completed_rounds())
-    if not completed:
-        return ""
-    return await asyncio.to_thread(pace_report, completed, 3)
-
-
-async def get_f1_response(query: str, for_voice: bool = False, history: list[dict] | None = None) -> str:
-    history = history or []
-    original_query = query
-    query = await _standalone_query(query, history)
-    query_lower = query.lower()
-    current_year = get_current_season()
-    years = _extract_years(query)
-    mentions_past_year = any(y < current_year for y in years)
-    mentions_current_year = any(y == current_year for y in years)
-    has_current_signal = mentions_current_year or any(
-        kw in query_lower for kw in CURRENT_SIGNALS
-    )
-
-    asks_standings = any(kw in query_lower for kw in STANDINGS_KEYWORDS)
-    asks_quali = any(kw in query_lower for kw in QUALI_KEYWORDS)
-
-    needs_standings_data = asks_standings
-    needs_quali_data = asks_quali
-    # Only reach for live web search when there's a genuine "currentness" signal
-    # or an explicit live-news keyword — not for purely historical questions.
-    needs_live_search = (
-        any(kw in query_lower for kw in LIVE_KEYWORDS)
-        or has_current_signal
-        or (asks_standings and not mentions_past_year)
-        or (asks_quali and not mentions_past_year)
-    )
-
-    # Standings/results tables are season-specific. If the user named a past
-    # year, fetch that season's data so we never pass 2026 tables for a 2008
-    # question. ``None`` means current season.
-    standings_year = None
-    if asks_standings and mentions_past_year:
-        standings_year = max(y for y in years if y < current_year)
-
-    f1_context = ""
-    if needs_quali_data:
-        qual_data = await _fetch_qualifying(query, query_lower)
-        if qual_data and "error" not in qual_data:
-            f1_context += f"Qualifying, {qual_data['name']} {qual_data['year']}:\n"
-            for q in qual_data["results"]:
-                q3 = q.get("q3", "").strip()
-                time_part = f" - {q3}" if q3 and q3 not in ("nan", "NaT", "None") else ""
-                f1_context += f"P{q['position']}: {q['driver']} ({q['team']}){time_part}\n"
-            f1_context += "\n"
-
-    if needs_standings_data:
-        fetch_constructors = "constructor" in query_lower or "team" in query_lower
-        if fetch_constructors:
-            driver_data, constructor_data, race_data = await asyncio.gather(
-                get_driver_standings(standings_year),
-                get_constructor_standings(standings_year),
-                get_last_race_results_async(standings_year),
-            )
-        else:
-            driver_data, race_data = await asyncio.gather(
-                get_driver_standings(standings_year),
-                get_last_race_results_async(standings_year),
-            )
-            constructor_data = None
-
-        if driver_data and "error" not in driver_data:
-            f1_context += f"{driver_data['year']} Driver Championship Standings (after round {driver_data['round']}):\n"
-            for d in driver_data["drivers"]:
-                f1_context += f"P{d['position']}: {d['driver']} ({d['team']}) - {d['points']} pts, {d['wins']} wins\n"
-            f1_context += "\n"
-
-        if constructor_data and "error" not in constructor_data:
-            f1_context += f"{constructor_data['year']} Constructor Standings (after round {constructor_data['round']}):\n"
-            for c in constructor_data["constructors"]:
-                f1_context += f"P{c['position']}: {c['team']} - {c['points']} pts\n"
-            f1_context += "\n"
-
-        if race_data and "error" not in race_data:
-            f1_context += f"Last race: {race_data['name']} {race_data['year']}\n"
-            for r in race_data["results"]:
-                f1_context += f"P{int(r['position'])}: {r['driver']} ({r['team']})\n"
-            f1_context += "\n"
-
-    # McLaren data blocks (computed in code, so the model only narrates them).
-    asks_teammates = any(kw in query_lower for kw in TEAMMATE_KEYWORDS) or (
-        "norris" in query_lower and "piastri" in query_lower
-    )
-    asks_title = any(kw in query_lower for kw in TITLE_KEYWORDS)
-    asks_pace = any(kw in query_lower for kw in PACE_KEYWORDS)
-    asks_debrief = any(kw in query_lower for kw in DEBRIEF_KEYWORDS)
-    if not mentions_past_year:
-        try:
-            if asks_teammates:
-                f1_context += (await mclaren.teammates_text()) + "\n\n"
-            if asks_title:
-                f1_context += (await mclaren.title_text()) + "\n\n"
-            if asks_debrief:
-                _, debrief = await mclaren.debrief_text()
-                if debrief:
-                    f1_context += debrief + "\n\n"
-            if asks_pace:
-                pace = await _pace_text()
-                if pace:
-                    f1_context += pace + "\n\n"
-        except Exception:
-            logger.warning("McLaren context failed", exc_info=True)
-
-    search_context = ""
-    if needs_live_search:
-        results = await search(f"F1 2026 {query}", max_results=8)
-        if results:
-            search_context = f"Recent information from F1 sources:\n{format_search_results(results)}"
-
-    combined_context = ""
-    if f1_context:
-        combined_context += f"Live F1 data:\n{f1_context}\n"
-    if search_context:
-        combined_context += search_context
-
-    race_result_query = any(kw in query_lower for kw in _RACE_RESULT_KEYWORDS)
-
-    if for_voice:
-        formatting_instruction = (
-            "\nThis reply will be spoken as a voice note. Two to four short sentences, about 60 words at most. "
-            "Answer the question in the first sentence. Talk like a person, not a document: contractions, "
-            "short sentences, no lists, no markdown or symbols. Say 'Formula One' not 'F1', 'fifth' not 'P5', "
-            "and say numbers the way you'd speak them. No intro and no sign-off."
-        )
-    else:
-        formatting_instruction = (
-            "\nPresent race results as a clean list (P1/P2/P3 etc.) with driver and team. "
-            "Do not explain how you found the data or hedge about sources. Just give the result directly."
-            if race_result_query and f1_context else ""
-        )
-
-    shown = original_query if original_query == query else f"{original_query} (meaning: {query})"
-    prompt = f"""The user is asking: {shown}
-
-{combined_context}
-
-Answer this F1 question accurately. Prioritise the live F1 data over search results over training knowledge for current season info.
-For current-season race or qualifying results, only state results that appear in the Live F1 data above. If the specific session or race the user asked about is not present in that data, say you don't have those results rather than guessing. Never produce results from memory or infer them from news headlines.
-For historical or technical questions, draw on your training knowledge.
-Answer only what was asked, starting with the answer itself. Be brief: one or two sentences for a simple factual question, under about 100 words otherwise unless they asked for detail. No filler, no recap, no offers of more help. UK English, no em or en dashes.{formatting_instruction}"""
-
+async def get_f1_response(
+    query: str,
+    for_voice: bool = False,
+    history: list[dict] | None = None,
+    user_id: int | None = None,
+    on_text=None,
+) -> str:
+    """Answer an F1 question. The model fetches whatever data it needs through
+    tools (standings, results, McLaren analysis, search, FIA documents), using
+    the conversation history to resolve follow-ups like "and Piastri?"."""
+    content = user_context(user_id) + query + (VOICE_RULES if for_voice else "")
     return await chat(
-        messages=list(history) + [{"role": "user", "content": prompt}],
+        messages=list(history or []) + [{"role": "user", "content": content}],
         model=SMART_MODEL,
+        tools=f1_tools(user_id),
+        extra_system=TOOL_RULES,
+        on_text=on_text,
     )
 
 
-async def answer_and_remember(chat_id: int, query: str, for_voice: bool = False) -> str:
+async def answer_and_remember(
+    chat_id: int, query: str, for_voice: bool = False, user_id: int | None = None, on_text=None,
+) -> str:
     """Answer with this chat's recent history, then store the exchange."""
     history = convo.get_history(chat_id)
-    if not await topic.is_on_topic(query, history):
-        return topic.OFF_TOPIC_REPLY
-    response = await get_f1_response(query, for_voice=for_voice, history=history)
+    response = await get_f1_response(
+        query, for_voice=for_voice, history=history, user_id=user_id, on_text=on_text,
+    )
     convo.add_exchange(chat_id, query, response)
     return response
+
+
+async def _answer_streamed(update: Update, query: str) -> str:
+    message = update.message
+    return await stream_reply(message, lambda on_text: answer_and_remember(
+        update.effective_chat.id, query, user_id=update.effective_user.id, on_text=on_text,
+    ))
 
 
 async def ask_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -292,15 +74,14 @@ async def ask_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     await update.message.reply_chat_action("typing")
-    response = await answer_and_remember(update.effective_chat.id, query)
-    await safe_reply(update.message, response)
-    await _maybe_grid(update.message, query, response)
+    await _answer_streamed(update, query)
+    await _maybe_grid(update.message, query)
 
 
-async def _maybe_grid(message, query: str, response: str) -> None:
-    """Attach the grid graphic to grid questions (skipped for off-topic refusals)."""
+async def _maybe_grid(message, query: str) -> None:
+    """Attach the grid graphic to grid questions."""
     from handlers.grid_cmd import wants_grid, send_grid_image
-    if response != topic.OFF_TOPIC_REPLY and wants_grid(query):
+    if wants_grid(query):
         await message.reply_chat_action("upload_photo")
         await send_grid_image(message)
 
@@ -313,11 +94,31 @@ async def chat_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await update.message.reply_text("Slow down, one question at a time.")
         return
     await update.message.reply_chat_action("typing")
-    response = await answer_and_remember(update.effective_chat.id, update.message.text)
-    await safe_reply(update.message, response)
-    await _maybe_grid(update.message, update.message.text, response)
+    await _answer_streamed(update, update.message.text)
+    await _maybe_grid(update.message, update.message.text)
 
 
 async def reset_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     convo.clear(update.effective_chat.id)
-    await update.message.reply_text("Fresh start. I've cleared our conversation.")
+    await update.message.reply_text(
+        "Fresh start. I've cleared our conversation (/me shows what I remember about you long-term)."
+    )
+
+
+async def me_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/me shows the long-term facts saved about you; /me clear forgets them."""
+    user_id = update.effective_user.id
+    if context.args and context.args[0].lower() in ("clear", "forget", "reset"):
+        done = userprefs.clear(user_id)
+        await update.message.reply_text("Done, I've forgotten everything about you." if done
+                                        else "I wasn't remembering anything about you.")
+        return
+    facts = userprefs.describe(user_id)
+    if not facts:
+        await update.message.reply_text(
+            "I don't remember anything about you yet. Tell me your favourite driver or your "
+            "F1 Fantasy team (or send a screenshot of it) and I'll keep it in mind."
+        )
+        return
+    await safe_reply(update.message, f"Here's what I remember about you:\n{facts}\n\n/me clear to forget it all.",
+                     parse_mode=None)

@@ -56,13 +56,15 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             await update.message.reply_text("Couldn't make out what you said. Try again?")
             return
 
-        response = await answer_and_remember(update.effective_chat.id, transcript, for_voice=True)
+        response = await answer_and_remember(
+            update.effective_chat.id, transcript, for_voice=True, user_id=user_id
+        )
 
         await update.message.reply_chat_action("record_voice")
 
         from handlers.ask import _maybe_grid
         if await send_voice_reply(update.message, response, caption=f'"{transcript}"'):
-            await _maybe_grid(update.message, transcript, response)
+            await _maybe_grid(update.message, transcript)
             return
 
         full_reply = f'_You said: "{transcript}"_\n\n{response}'

@@ -5,7 +5,7 @@ from utils.f1_data import get_qualifying_results, get_next_race_info, get_curren
 from utils.groq_client import chat, SMART_MODEL, MCLAREN_ANGLE
 from utils.tavily_client import search, format_search_results
 from utils.rate_limit import is_rate_limited
-from utils.telegram_safe import safe_reply
+from utils.telegram_safe import stream_reply
 
 
 async def run_predict(message, user_id: int) -> None:
@@ -59,12 +59,12 @@ Don't just say "pole sitter will win" - actually think about whether the race te
 whether anyone behind has the pace to challenge, whether there's a wildcard.
 Be honest if it's hard to call."""
 
-    response = await chat(
+    await stream_reply(message, lambda on_text: chat(
         messages=[{"role": "user", "content": prompt + MCLAREN_ANGLE}],
         model=SMART_MODEL,
-    )
-
-    await safe_reply(message, response)
+        effort="medium",
+        on_text=on_text,
+    ))
 
 
 async def predict_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

@@ -1,7 +1,6 @@
 """Per-chat conversation memory so follow-ups ("and Piastri?") have context.
 
-Kept deliberately small: the last few exchanges per chat, expiring after a few
-hours of silence, persisted through utils.store so a redeploy doesn't wipe it.
+The last 20 exchanges per chat, expiring after a day of silence, persisted through utils.store so a redeploy doesn't wipe it.
 """
 
 import time
@@ -9,9 +8,9 @@ import time
 from utils import store
 
 _KEY = "convo_memory_v1"
-MAX_MESSAGES = 12          # 6 user/assistant exchanges
-TTL_SECONDS = 6 * 3600
-_MAX_CHARS = 2000          # per stored message
+MAX_MESSAGES = 40          # 20 user/assistant exchanges
+TTL_SECONDS = 24 * 3600
+_MAX_CHARS = 4000          # per stored message
 
 _mem: dict[str, dict] | None = None
 

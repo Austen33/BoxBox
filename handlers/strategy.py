@@ -5,7 +5,7 @@ from utils.f1_data import get_lap_data_for_strategy
 from utils.groq_client import chat, SMART_MODEL, MCLAREN_ANGLE
 from utils.tavily_client import search, format_search_results
 from utils.rate_limit import is_rate_limited
-from utils.telegram_safe import safe_reply
+from utils.telegram_safe import stream_reply
 
 
 async def strategy_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -61,9 +61,9 @@ Don't just list what everyone did. Explain the decision-making, the track positi
 the tyre delta, when the safety car or VSC changed things if it did.
 Make this feel like proper analysis, not a Wikipedia summary."""
 
-    response = await chat(
+    await stream_reply(update.message, lambda on_text: chat(
         messages=[{"role": "user", "content": prompt + MCLAREN_ANGLE}],
         model=SMART_MODEL,
-    )
-
-    await safe_reply(update.message, response)
+        effort="medium",
+        on_text=on_text,
+    ))
