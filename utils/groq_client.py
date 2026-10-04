@@ -105,6 +105,8 @@ async def _post(payload: dict, attempts: int = 3) -> dict:
 # Cheap and fast for short lookups; stronger model for reasoning-heavy answers.
 FAST_MODEL = os.getenv("FAST_MODEL", "openai/gpt-6-luna")
 SMART_MODEL = os.getenv("SMART_MODEL", "anthropic/claude-sonnet-5.5")
+# Photos/screenshots. Defaults to the smart model, which accepts images.
+VISION_MODEL = os.getenv("VISION_MODEL", SMART_MODEL)
 STT_MODEL = os.getenv("STT_MODEL", "google/gemini-3.5-flash-lite")
 TTS_MODEL = os.getenv("TTS_MODEL", "openai/gpt-audio-mini")
 # gpt-audio voices: alloy, ash, ballad, coral, echo, sage, shimmer, verse, marin, cedar
@@ -491,9 +493,9 @@ async def chat_vision(
     image_bytes: bytes,
     mime: str = "image/jpeg",
     history: list | None = None,
-    model: str = SMART_MODEL,
+    model: str = VISION_MODEL,
 ) -> str:
-    """Answer a question about an image (photo/screenshot) with the main model."""
+    """Answer a question about an image (photo/screenshot) with the vision model."""
     data_url = f"data:{mime};base64,{base64.b64encode(image_bytes).decode()}"
     user_msg = {
         "role": "user",

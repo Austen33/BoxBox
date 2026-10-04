@@ -114,6 +114,37 @@ async def stats_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await safe_reply(update.message, format_stats())
 
 
+async def models_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Admin-only: which models and APIs the bot is configured to use."""
+    from utils.admin import get_admin_chat_id, is_admin
+    from utils import groq_client as g
+
+    chat_id = update.effective_chat.id
+    if get_admin_chat_id() is not None and not is_admin(chat_id):
+        await update.message.reply_text("/models is admin-only.")
+        return
+
+    def src(env: str) -> str:
+        return "env" if os.environ.get(env) else "default"
+
+    def has(env: str) -> str:
+        return "key set" if os.environ.get(env) else "key MISSING"
+
+    text = (
+        "Models\n"
+        f"Smart (chat, /ask, analysis): {g.SMART_MODEL} ({src('SMART_MODEL')})\n"
+        f"Fast (short lookups, rewrites): {g.FAST_MODEL} ({src('FAST_MODEL')})\n"
+        f"Vision (photos): {g.VISION_MODEL} ({src('VISION_MODEL')})\n"
+        f"Speech-to-text: {g.STT_MODEL} ({src('STT_MODEL')})\n"
+        f"Text-to-speech: edge-tts {g.EDGE_TTS_VOICE}, then {g.TTS_MODEL} "
+        f"(voice {g.TTS_VOICE}), then gTTS\n\n"
+        "APIs\n"
+        f"LLM: OpenRouter, {g.OPENROUTER_URL} ({has('OPEN_ROUTER_KEY')})\n"
+        f"Search: Tavily ({has('TAVILY_API_KEY')})"
+    )
+    await safe_reply(update.message, text, parse_mode=None)
+
+
 async def errors_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Admin diagnostics: recent errors + config check, safe to paste into a chat.
 
@@ -261,6 +292,7 @@ def main() -> None:
     application.add_handler(CommandHandler("testvoice", testvoice_handler))
     application.add_handler(CommandHandler("stats", stats_handler))
     application.add_handler(CommandHandler("errors", errors_handler))
+    application.add_handler(CommandHandler("models", models_handler))
 
     application.add_handler(
         MessageHandler(filters.VOICE, track("voice")(voice_handler))
