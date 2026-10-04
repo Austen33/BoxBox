@@ -100,6 +100,8 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         "/debrief - spoken McLaren debrief of the last race\n"
         "/reset - clear our conversation\n"
         "/me - what I remember about you (favourite driver, fantasy team); /me clear to forget\n"
+        "/cost - what each of your recent prompts cost (tokens and $)\n"
+        "/pipeline - how I answered your last question, step by step (the RAG pipeline)\n"
         "/notify - toggle session reminders, live results after each session and breaking news\n"
         "\n"
         "Or just chat: type a question (follow-ups work), send a *voice note*, or send a *photo or screenshot* (timing screens and F1 Fantasy teams too), a *video clip* or a *PDF* and ask about it.\n\n"
@@ -116,6 +118,26 @@ async def stats_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if not is_admin(update.effective_chat.id):
         return
     await safe_reply(update.message, format_stats())
+
+
+async def cost_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """What each recent prompt in this chat cost. /cost [n]; admins can add 'all' for every chat."""
+    from utils.admin import is_admin
+    from utils.metrics import format_cost, recent_prompts
+
+    args = [a.lower() for a in context.args or []]
+    all_chats = "all" in args and is_admin(update.effective_chat.id)
+    n = next((min(int(a), 30) for a in args if a.isdigit()), 10)
+    rows = recent_prompts(None if all_chats else update.effective_chat.id, n)
+    await safe_reply(update.message, format_cost(rows, all_chats), parse_mode=None)
+
+
+async def pipeline_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """The RAG pipeline, traced step by step for the last prompt in this chat."""
+    from utils.metrics import format_pipeline, recent_prompts
+
+    rows = recent_prompts(update.effective_chat.id, 1)
+    await safe_reply(update.message, format_pipeline(rows[0] if rows else None), parse_mode=None)
 
 
 async def models_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -241,6 +263,8 @@ async def post_init(application: Application) -> None:
         BotCommand("debrief", "Spoken McLaren debrief of the last race"),
         BotCommand("reset", "Clear our conversation"),
         BotCommand("me", "What I remember about you"),
+        BotCommand("cost", "What each of your recent prompts cost"),
+        BotCommand("pipeline", "How your last question was answered, step by step"),
     ]
     await application.bot.set_my_commands(commands)
     setup_scheduler(application)
@@ -296,6 +320,8 @@ def main() -> None:
         "reset": reset_handler,
         "me": me_handler,
         "stewards": stewards_handler,
+        "cost": cost_handler,
+        "pipeline": pipeline_handler,
     }
     for name, handler in commands.items():
         application.add_handler(CommandHandler(name, track(name)(handler)))

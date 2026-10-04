@@ -2,7 +2,7 @@ import logging
 from telegram import Update
 from telegram.ext import ContextTypes
 from utils.groq_client import chat, SMART_MODEL
-from utils import convo, userprefs
+from utils import convo, metrics, userprefs
 from utils.f1_tools import TOOL_RULES, f1_tools
 from utils.rate_limit import is_rate_limited
 from utils.telegram_safe import safe_reply, stream_reply
@@ -20,6 +20,8 @@ VOICE_RULES = (
 def user_context(user_id: int | None) -> str:
     """What we've saved about this user, as a preface for their message."""
     facts = userprefs.describe(user_id) if user_id else ""
+    if facts:
+        metrics.step("context", f"saved facts about user: {facts.count(chr(10)) + 1}")
     return f"(What you know about this user from earlier chats:\n{facts})\n\n" if facts else ""
 
 
@@ -48,10 +50,12 @@ async def answer_and_remember(
 ) -> str:
     """Answer with this chat's recent history, then store the exchange."""
     history = convo.get_history(chat_id)
+    metrics.step("context", f"chat history: {len(history)} messages")
     response = await get_f1_response(
         query, for_voice=for_voice, history=history, user_id=user_id, on_text=on_text,
     )
     convo.add_exchange(chat_id, query, response)
+    metrics.step("memory", "exchange saved to chat history")
     return response
 
 

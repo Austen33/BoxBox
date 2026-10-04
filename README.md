@@ -35,6 +35,8 @@ BoxBox combines live timing data from [FastF1](https://github.com/theOehrly/Fast
 | `/stewards [question]` | Penalties and stewards' decisions read straight from the official FIA documents (PDFs) |
 | `/reset` | Clear the conversation memory |
 | `/me` | What the bot remembers about you long-term (favourite driver, F1 Fantasy team); `/me clear` forgets it |
+| `/cost [n]` | What each of your recent prompts cost: LLM calls, tokens in/cached/out, $ and time (admins: `/cost all` for every chat) |
+| `/pipeline` | The RAG pipeline, with a step-by-step trace of how your last question was answered (context, live data, tool calls, LLM rounds) |
 | `/notify` | Toggle session reminders, McLaren qualifying/race result alerts and breaking-news alerts |
 | Plain text | In a private chat just type: the model fetches standings, results, McLaren analysis, news and FIA documents itself (tool calling), follow-ups like "and Piastri?" work, and replies stream in as they are written |
 | Voice note | Transcribed and answered like a typed question (all the McLaren data above works by voice too) |

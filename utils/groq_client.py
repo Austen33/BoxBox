@@ -5,11 +5,13 @@ import logging
 import os
 import re
 import shutil
+import time
 from dataclasses import dataclass
 from typing import Awaitable, Callable
 
 import httpx
 
+from utils import metrics
 from utils.metrics import record_llm
 
 logger = logging.getLogger(__name__)
@@ -104,6 +106,7 @@ async def _post(payload: dict, attempts: int = 3) -> dict:
     payload = _with_fallbacks(payload)
     delay = 1.0
     for attempt in range(attempts):
+        t0 = time.monotonic()
         resp = await _get_client().post(OPENROUTER_URL, headers=_headers(), json=payload)
         if resp.status_code in (429, 500, 502, 503, 504) and attempt < attempts - 1:
             logger.warning("OpenRouter %s, retrying in %.0fs", resp.status_code, delay)
@@ -117,7 +120,7 @@ async def _post(payload: dict, attempts: int = 3) -> dict:
         data = resp.json()
         if "error" in data:
             raise RuntimeError(f"OpenRouter error: {data['error']}")
-        record_llm(data.get("usage"))
+        record_llm(data.get("usage"), data.get("model") or payload.get("model"), (time.monotonic() - t0) * 1000)
         return data
     raise RuntimeError("OpenRouter request failed")
 
@@ -460,7 +463,10 @@ async def _system_message(system: str | None, extra_system: str | None, model: s
     else:
         from utils.mclaren import live_snapshot  # local imports: avoid a cycle
         from utils.news import latest_news
+        t0 = time.monotonic()
         live, news = await asyncio.gather(live_snapshot(), latest_news())
+        metrics.step("live", f"weekend snapshot {len(live or '')} chars, headlines {len(news or '')} chars",
+                     (time.monotonic() - t0) * 1000)
         static = "\n\n".join(p for p in (SYSTEM_PROMPT, extra_system) if p)
         dynamic = "\n\n".join(p for p in (live, news) if p)
     if not _supports_cache_control(model):
@@ -559,13 +565,18 @@ async def _run_tool(call: dict, tools: dict[str, Tool]) -> str:
         args = json.loads(fn.get("arguments") or "{}") or {}
     except json.JSONDecodeError:
         return "Tool arguments were not valid JSON."
+    t0 = time.monotonic()
     try:
         result = await tool.fn(**args)
     except TypeError as e:
         return f"Bad arguments for {tool.name}: {e}"
     except Exception as e:
         logger.warning("tool %s failed", tool.name, exc_info=True)
+        metrics.step("tool", f"{tool.name}({fn.get('arguments')}) failed: {type(e).__name__}",
+                     (time.monotonic() - t0) * 1000)
         return f"{tool.name} failed: {type(e).__name__}. Answer without it."
+    metrics.step("tool", f"{tool.name}({fn.get('arguments')}) -> {len(result or '')} chars",
+                 (time.monotonic() - t0) * 1000)
     logger.info("tool %s(%s) -> %d chars", tool.name, fn.get("arguments"), len(result or ""))
     return (result or "No data.")[:_TOOL_RESULT_LIMIT]
 
@@ -596,6 +607,7 @@ async def _post_stream(payload: dict, on_text: OnText, attempts: int = 3) -> dic
     payload = _with_fallbacks({**payload, "stream": True})
     delay = 1.0
     for attempt in range(attempts):
+        t0 = time.monotonic()
         content, finish, model, usage = "", None, payload.get("model"), None
         calls: dict[int, dict] = {}
         reasoning: list[dict] = []
@@ -649,7 +661,7 @@ async def _post_stream(payload: dict, on_text: OnText, attempts: int = 3) -> dic
             message["tool_calls"] = [calls[i] for i in sorted(calls)]
         if reasoning:
             message["reasoning_details"] = reasoning
-        record_llm(usage)
+        record_llm(usage, model, (time.monotonic() - t0) * 1000)
         return {"model": model, "usage": usage, "choices": [{"message": message, "finish_reason": finish}]}
     raise RuntimeError("OpenRouter request failed")
 
