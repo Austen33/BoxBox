@@ -12,15 +12,22 @@ is empty until the official results are published:
   - sprint / race: laps completed, then running position on the last lap
 Qualifying, sprint and race are labelled provisional; the official Jolpi
 classification replaces them once it is published.
+
+Qualifying, sprint and race are also polled every couple of minutes from just
+before they could finish, using the tiny SessionStatus feed, so results land
+(and get pushed to subscribers) a few minutes after the chequered flag.
 """
 
 import asyncio
 import logging
+import os
+import shutil
 import time
 from datetime import datetime, timedelta, timezone
 
 import fastf1
 import pandas as pd
+from fastf1 import _api as ff1_api  # SessionStatus feed (fastf1.api is being made private)
 
 import utils.f1_data  # noqa: F401  (enables the FastF1 cache directory)
 from utils import store
@@ -43,6 +50,17 @@ SESSIONS = [
 _PRACTICE = {"FP1", "FP2", "FP3"}
 # Minutes after the scheduled end to try collecting (live-timing files can lag).
 _ATTEMPT_OFFSETS = [12, 30, 60, 120, 240]
+# Sessions polled right through their likely finish: (first, last) minutes after
+# the start. Races run from ~85 minutes to well over 2 hours with red flags.
+_FAST_POLL = {"SQ": (35, 100), "S": (25, 100), "Q": (50, 150), "R": (80, 260)}
+_POLL_MINUTES = 2
+# Only alert subscribers for results collected this long after the scheduled
+# end, so a catch-up after downtime doesn't push days-old sessions.
+_ALERT_WINDOW = timedelta(hours=4)
+_QUALI_LIKE = {"Q", "SQ"}
+# race/sprint key -> when "Finished" (chequered flag) was first seen
+_flag_seen: dict[str, float] = {}
+_inflight: set[str] = set()
 
 
 def _key(year: int, rnd: int, code: str) -> str:
@@ -117,10 +135,57 @@ def _classify(session, code: str) -> list[dict]:
     ]
 
 
+def _is_finished(session, key: str, code: str) -> bool:
+    """Blocking, uncached: has live timing marked the whole session as over?
+
+    Reads only the small SessionStatus feed, so it's cheap to poll. Each of
+    Q1/Q2/Q3 ends with "Finished", so qualifying needs all three (or the final
+    "Finalised"/"Ends"). For a race or sprint, "Finished" is the leader taking
+    the flag; wait one more poll so the rest of the field crosses the line.
+    """
+    with fastf1.Cache.disabled():
+        try:
+            status = ff1_api.session_status_data(session.api_path)
+        except Exception as e:
+            logger.info("sessions: no status for %s yet (%s)", key, e)
+            return False
+    seen = [str(s) for s in status["Status"]]
+    if {"Finalised", "Ends"} & set(seen):
+        return True
+    if code in _QUALI_LIKE:
+        return seen.count("Finished") >= 3
+    if "Finished" not in seen:
+        return False
+    first = _flag_seen.setdefault(key, time.time())
+    return time.time() - first >= 90
+
+
+def _drop_stale_cache(session) -> None:
+    """Forget anything FastF1 cached for this session while it was still running
+    (e.g. someone used /lap mid-race), so later loads see the full session."""
+    cache = fastf1.Cache
+    try:
+        if cache._CACHE_DIR:
+            shutil.rmtree(os.path.join(cache._CACHE_DIR, session.api_path[8:]), ignore_errors=True)
+        http = cache._requests_session_cached
+        if http is not None:
+            http.cache.delete(urls=[u for u in http.cache.urls() if session.api_path in u])
+    except Exception:
+        logger.info("sessions: couldn't clear cached data for %s", session.api_path, exc_info=True)
+
+
 def fetch_session(year: int, rnd: int, code: str) -> dict | None:
-    """Blocking: load one session from live timing and classify it. None if not ready."""
+    """Blocking: load one session from live timing and classify it. None if not ready.
+
+    Bypasses FastF1's cache: it keeps parsed data forever, so a load during the
+    session would otherwise freeze it half-finished.
+    """
     session = fastf1.get_session(year, rnd, code)
-    session.load(laps=True, telemetry=False, weather=False, messages=False)
+    if not _is_finished(session, _key(year, rnd, code), code):
+        return None
+    with fastf1.Cache.disabled():  # not thread-safe, but at worst skips caching elsewhere briefly
+        session.load(laps=True, telemetry=False, weather=False, messages=False)
+    _drop_stale_cache(session)
     if session.laps is None or len(session.laps) == 0:
         return None
     # Don't store a half-finished session (red flags and delays overrun the
@@ -174,22 +239,34 @@ def _session_window(race: dict, sched_key: str, minutes: int) -> tuple[datetime,
     return start, start + timedelta(minutes=minutes)
 
 
-async def collect(year: int, rnd: int, code: str, on_new=None) -> bool:
-    """Collect one session if it isn't stored yet. Returns True when stored."""
+async def collect(year: int, rnd: int, code: str, on_new=None, alert_until: float = 0) -> bool:
+    """Collect one session if it isn't stored yet. Returns True when stored.
+
+    ``on_new(year, rnd, code, result, fresh)`` runs once per new session; fresh
+    is True while it's still worth alerting people (before ``alert_until``).
+    """
+    key = _key(year, rnd, code)
     if code in get_stored(year, rnd):
         return True
+    if key in _inflight:  # a fast poll and a fallback attempt overlapping
+        return False
+    _inflight.add(key)
     try:
-        result = await asyncio.to_thread(fetch_session, year, rnd, code)
-    except Exception as e:
-        logger.info("sessions: %s not ready yet (%s)", _key(year, rnd, code), e)
-        return False
-    if not result:
-        return False
-    _save(year, rnd, code, result)
-    logger.info("sessions: collected %s (%d drivers)", _key(year, rnd, code), len(result["rows"]))
+        try:
+            result = await asyncio.to_thread(fetch_session, year, rnd, code)
+        except Exception as e:
+            logger.info("sessions: %s not ready yet (%s)", key, e)
+            return False
+        if not result:
+            return False
+        _save(year, rnd, code, result)
+        _flag_seen.pop(key, None)
+    finally:
+        _inflight.discard(key)
+    logger.info("sessions: collected %s (%d drivers)", key, len(result["rows"]))
     if on_new:
         try:
-            await on_new(year, rnd, code, result)
+            await on_new(year, rnd, code, result, time.time() < alert_until)
         except Exception:
             logger.warning("sessions: on_new callback failed", exc_info=True)
     return True
@@ -214,12 +291,25 @@ async def plan_jobs(scheduler, on_new=None) -> int:
             start, end = window
             if end < now - timedelta(days=3) or start > now + timedelta(days=8):
                 continue
+            alert_until = (end + _ALERT_WINDOW).timestamp()
+            args = [year, rnd, code, on_new, alert_until]
+            if code in _FAST_POLL:
+                first, last = (start + timedelta(minutes=m) for m in _FAST_POLL[code])
+                if last > now:
+                    scheduler.add_job(
+                        collect, "interval", minutes=_POLL_MINUTES,
+                        start_date=max(first, now), end_date=last,
+                        args=args, id=f"collect-{year}-{rnd}-{code}-poll",
+                        replace_existing=True, coalesce=True, max_instances=1,
+                        misfire_grace_time=60,
+                    )
+                    planned += 1
             if end <= now:
                 if code not in get_stored(year, rnd):
                     stagger += 20  # missed while offline: catch up, spaced out
                     scheduler.add_job(
                         collect, "date", run_date=now + timedelta(seconds=stagger),
-                        args=[year, rnd, code, on_new], id=f"collect-{year}-{rnd}-{code}-now",
+                        args=args, id=f"collect-{year}-{rnd}-{code}-now",
                         replace_existing=True, misfire_grace_time=3600,
                     )
                     planned += 1
@@ -227,7 +317,7 @@ async def plan_jobs(scheduler, on_new=None) -> int:
             for off in _ATTEMPT_OFFSETS:
                 scheduler.add_job(
                     collect, "date", run_date=end + timedelta(minutes=off),
-                    args=[year, rnd, code, on_new], id=f"collect-{year}-{rnd}-{code}-{off}",
+                    args=args, id=f"collect-{year}-{rnd}-{code}-{off}",
                     replace_existing=True, misfire_grace_time=1800,
                 )
                 planned += 1
@@ -273,9 +363,12 @@ async def driver_meta(year: int, rnd: int) -> dict:
     key = f"{year}-{rnd}"
     if cache.get(key):
         return cache[key]
+    if year < 2018:  # F1 live timing (team colours) only goes back to 2018
+        return {}
     meta = await asyncio.to_thread(_load_meta, year, rnd)
     if meta:
-        cache = {k: v for k, v in cache.items() if k.startswith(f"{year}-")}  # this season only
         cache[key] = meta
+        for k in list(cache)[:-30]:  # keep the 30 most recent lookups
+            cache.pop(k, None)
         store.save(_META_KEY, cache)
     return meta

@@ -152,8 +152,17 @@ async def grid_block(race_name: str, quali_rows: list[dict]) -> str:
     )
 
 
-async def grid_data() -> dict | None:
-    """Everything needed to draw this weekend's starting grid.
+def _code(drv: dict) -> str:
+    """Three-letter code; older seasons have none, so build one ("de Cesaris" -> CES)."""
+    if drv.get("code"):
+        return drv["code"]
+    surname = drv["familyName"].split()[-1]
+    return re.sub(r"[^A-Za-z]", "", surname)[:3].upper() or drv["familyName"][:3].upper()
+
+
+async def grid_data(year: int | None = None, rnd: int | None = None) -> dict | None:
+    """Everything needed to draw a starting grid: this weekend's by default, or
+    any round of any season.
 
     Official once the race has been run (grid slots from the race result),
     otherwise provisional: official qualifying order + reported penalties.
@@ -161,40 +170,50 @@ async def grid_data() -> dict | None:
     from utils import mclaren, sessions
     from utils.f1_data import get_current_season
 
-    year = get_current_season()
-    wk = await mclaren.current_weekend(year)
-    if not wk:
-        return None
-    rnd = int(wk["round"])
+    season = get_current_season()
+    wk = await mclaren.current_weekend(season)
+    if rnd is None:
+        if not wk:
+            return None
+        year, rnd, event = season, int(wk["round"]), wk
+    else:
+        year = year or season
+        event = next((r for r in await mclaren.get_schedule(year) if int(r["round"]) == rnd), None)
+        if not event:
+            return None
+    # News-reported penalties only make sense for the weekend that's underway.
+    is_current = bool(wk) and year == season and int(wk["round"]) == rnd
     quali, _sprint, race = await mclaren._weekend_sessions(year, rnd)
     meta = await sessions.driver_meta(year, rnd)
 
     def entry(pos: int, drv: dict, team_fallback: str, note: str = "") -> dict:
-        code = drv.get("code") or drv["familyName"][:3].upper()
+        code = _code(drv)
         m = meta.get(code, {})
         return {
             "pos": pos, "code": code, "name": m.get("name") or drv["familyName"],
             "team": m.get("team") or team_fallback, "color": m.get("color", ""), "note": note,
         }
 
-    base = {"race": wk["raceName"], "round": rnd, "date": wk["date"]}
+    base = {"race": event["raceName"], "year": year, "round": rnd, "date": event["date"]}
     if race:
         results = race[0]["Results"]
         on_grid = sorted([r for r in results if int(r.get("grid", 0)) > 0], key=lambda r: int(r["grid"]))
-        pit = [r for r in results if int(r.get("grid", 0)) == 0]
+        # Grid 0 is a pit-lane start, but older seasons also list non-qualifiers that way.
+        pit = [r for r in results if int(r.get("grid", 0)) == 0
+               and not re.search(r"qualify|withdrew|not start", r.get("status", ""), re.IGNORECASE)]
         entries = [entry(i + 1, r["Driver"], r["Constructor"]["name"]) for i, r in enumerate(on_grid)]
         entries += [entry(len(entries) + i + 1, r["Driver"], r["Constructor"]["name"], "PIT LANE")
                     for i, r in enumerate(pit)]
         return {**base, "status": "official", "entries": entries,
-                "footnote": "Official starting grid from the race classification. "
-                            "Team colours from F1 timing data."}
+                "footnote": "Official starting grid from the race classification."
+                            + (" Team colours from F1 timing data." if meta else "")}
     if not quali:
         return None
 
     rows = quali[0]["QualifyingResults"]
-    by_code = {(r["Driver"].get("code") or r["Driver"]["familyName"][:3].upper()): r for r in rows}
+    by_code = {_code(r["Driver"]): r for r in rows}
     codes = list(by_code)
-    pens = await penalties(wk["raceName"], codes)
+    pens = await penalties(event["raceName"], codes) if is_current else []
     pen_by = {p["driver"]: p for p in pens}
     order = apply_penalties(codes, pens)
 

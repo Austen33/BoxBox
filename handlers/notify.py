@@ -10,7 +10,7 @@ from telegram.ext import Application, ContextTypes
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.date import DateTrigger
 from apscheduler.triggers.interval import IntervalTrigger
-from utils.f1_data import get_event_schedule, IRISH_TZ, UTC_TZ
+from utils.f1_data import get_event_schedule, get_current_season, IRISH_TZ, UTC_TZ
 from utils.rate_limit import is_rate_limited
 from utils.tavily_client import search
 from utils.groq_client import chat, FAST_MODEL
@@ -96,12 +96,13 @@ def setup_scheduler(application: Application) -> None:
     _scheduler.add_job(
         _plan_session_collection,
         trigger=IntervalTrigger(hours=6),
+        args=[application],
         id="plan_sessions",
         replace_existing=True,
         next_run_time=datetime.datetime.now(pytz.utc) + datetime.timedelta(seconds=15),
     )
     _scheduler.start()
-    logger.info("Scheduler started (news checks every 30min, McLaren result alerts every 10min).")
+    logger.info("Scheduler started (news checks every 30min, McLaren result alerts every 10min, live results after each session).")
 
 
 def _schedule_all_reminders(application: Application) -> None:
@@ -241,16 +242,82 @@ News:
         logger.error(f"Error checking breaking news: {e}")
 
 
-async def _on_session_collected(year: int, rnd: int, code: str, result: dict) -> None:
-    """A session just finished: make the next answer pick up fresh news too."""
+# Sessions pushed to subscribers as soon as live timing has them.
+_ALERT_SESSIONS = {"Q": ("⏱", "qualifying"), "S": ("🏁", "sprint result"), "R": ("🏁", "race result")}
+_PUSHED_KEY = "session_alerts_pushed"
+
+
+def _pushed() -> list[str]:
+    return store.load(_PUSHED_KEY, []) or []
+
+
+def _mark_pushed(key: str) -> None:
+    keys = [k for k in _pushed() if k != key][-59:]
+    store.save(_PUSHED_KEY, keys + [key])
+
+
+async def _session_alert_text(year: int, rnd: int, code: str, result: dict) -> str:
+    from utils import sessions
+    icon, what = _ALERT_SESSIONS[code]
+    rows = result["rows"]
+
+    def line(r):
+        extra = r.get("time") or r.get("note") or ""
+        return f"P{r['pos']} {r['driver']} ({r['team']})" + (f", {extra}" if extra else "")
+
+    table = "\n".join(line(r) for r in rows[:10])
+    mcl = [f"P{r['pos']} {r['driver']}" for r in rows if "mclaren" in str(r.get("team", "")).lower()]
+    text = f"{icon} *{result['event']}: {what}*\n_Provisional, from live timing_\n\n{table}"
+    if mcl:
+        text += f"\n\nMcLaren: {', '.join(mcl)}"
+
+    facts = "\n".join(line(r) for r in rows)
+    if code == "R":
+        quali = sessions.get_stored(year, rnd).get("Q")
+        if quali:
+            facts += "\n\nQualifying order (before any grid penalties): " + ", ".join(
+                f"P{r['pos']} {r['driver']}" for r in quali["rows"])
+    prompt = f"""{result['event']} {result['session']} classification (provisional, from live timing):
+{facts}
+
+Write 2 to 3 short sentences for a Telegram chat: who won (or took pole) and the McLaren angle.
+Use only the facts above. Don't invent gaps, pit stops, incidents or reasons for retirements."""
+    try:
+        summary = await chat(messages=[{"role": "user", "content": prompt}], model=FAST_MODEL)
+        if summary:
+            text += f"\n\n{summary.strip()}"
+    except Exception:
+        logger.warning("session alert summary failed", exc_info=True)
+    return text
+
+
+async def _on_session_collected(application: Application, year: int, rnd: int, code: str,
+                                result: dict, fresh: bool) -> None:
+    """A session just finished: refresh news, and push results to subscribers."""
     from utils import news
     news.invalidate()
 
+    key = f"{year}-{rnd}-{code}"
+    if not fresh or code not in _ALERT_SESSIONS or not _subscribers or key in _pushed():
+        return
+    text = await _session_alert_text(year, rnd, code, result)
+    # Persist before sending so a send failure can't cause a repeat.
+    _mark_pushed(key)
+    for chat_id in list(_subscribers):
+        hits = match_follows(chat_id, " ".join(r["driver"] for r in result["rows"][:10]))
+        prefix = f"⭐ {', '.join(hits)} you follow\n\n" if hits else ""
+        await safe_send(application.bot, chat_id, prefix + text)
+    logger.info("Pushed %s results to %d subscriber(s)", key, len(_subscribers))
 
-async def _plan_session_collection() -> None:
+
+async def _plan_session_collection(application: Application) -> None:
     from utils import sessions
+
+    async def on_new(*args):
+        await _on_session_collected(application, *args)
+
     try:
-        await sessions.plan_jobs(_scheduler, on_new=_on_session_collected)
+        await sessions.plan_jobs(_scheduler, on_new=on_new)
     except Exception:
         logger.exception("Planning session collection failed")
 
@@ -271,8 +338,14 @@ async def _check_mclaren_sessions(application: Application) -> None:
             return
 
         alerts = []
+        year = get_current_season()
+        pushed = _pushed()
+        race_key, quali_key = f"{year}-{markers['race']}-R", f"{year}-{markers['quali']}-Q"
+        race_new = markers["race"] > state.get("race", 0)
+        quali_new = markers["quali"] > state.get("quali", 0)
         # Race first (a new race round also implies its quali is old news).
-        if markers["race"] > state.get("race", 0):
+        # Sessions already pushed from live timing just get their marker updated.
+        if race_new and race_key not in pushed:
             name, data = await mclaren.debrief_text()
             if data:
                 prompt = f"""{data}
@@ -282,7 +355,7 @@ finished and the points scored, then the championship impact. Be honest if it wa
 Use only the facts above."""
                 alerts.append(f"🏁 *{name}: McLaren result*\n\n" + await chat(
                     messages=[{"role": "user", "content": prompt}], model=FAST_MODEL))
-        elif markers["quali"] > state.get("quali", 0):
+        elif not race_new and quali_new and quali_key not in pushed:
             name, data = await mclaren.quali_alert_text()
             if data:
                 prompt = f"""{data}
@@ -294,6 +367,8 @@ start and how far off pole they are. Be honest if it went badly. Use only the fa
 
         # Persist before sending so a send failure can't cause a repeat storm.
         store.save(_MCLAREN_STATE_KEY, markers)
+        if alerts:
+            _mark_pushed(race_key if race_new else quali_key)
         for text in alerts:
             for chat_id in list(_subscribers):
                 await safe_send(application.bot, chat_id, text)
@@ -315,7 +390,8 @@ async def subscribe_core(message, chat_id: int) -> None:
     await message.reply_text(
         "Reminders on. You'll get:\n"
         "• 30-min alerts before each session\n"
-        "• McLaren qualifying and race result alerts\n• Breaking F1 news as it happens\n\n"
+        "• Qualifying, sprint and race results minutes after the flag\n"
+        "• Breaking F1 news as it happens\n\n"
         "Use /notify again to turn them off."
     )
 
@@ -340,6 +416,7 @@ async def notify_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await update.message.reply_text(
             "Reminders on. You'll get:\n"
             "• 30-min alerts before each session\n"
-            "• McLaren qualifying and race result alerts\n• Breaking F1 news as it happens\n\n"
+            "• Qualifying, sprint and race results minutes after the flag\n"
+        "• Breaking F1 news as it happens\n\n"
             "Use /notify again to turn them off."
         )

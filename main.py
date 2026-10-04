@@ -90,13 +90,13 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         "/rewind \\[circuit\\] \\[year\\] - relive key moments from any past race\n"
         "/result - latest race result with concise DNF reasons\n"
         "/follow \\[driver/team\\] - flag their breaking news (also /unfollow)\n"
-        "/grid - starting grid graphic for this weekend (penalties applied)\n"
+        "/grid \\[race\\] \\[year\\] - starting grid graphic: this weekend (penalties applied) or any past race (e.g. /grid monaco 2024)\n"
         "/teammates - Norris vs Piastri: the McLaren team-mate battle\n"
         "/title - championship maths and what McLaren can still achieve\n"
         "/pace - McLaren race pace vs Mercedes, Ferrari and Red Bull (upgrade watch)\n"
         "/debrief - spoken McLaren debrief of the last race\n"
         "/reset - clear our conversation\n"
-        "/notify - toggle session reminders, McLaren result alerts and breaking news\n"
+        "/notify - toggle session reminders, live results after each session and breaking news\n"
         "\n"
         "Or just chat: type a question (follow-ups work), send a *voice note*, or send a *photo or screenshot* and ask about it.\n\n"
         "Lights out and away we go."
@@ -225,7 +225,7 @@ async def post_init(application: Application) -> None:
         BotCommand("notify", "Toggle session reminders and breaking news"),
         BotCommand("rewind", "Relive key moments from a past race"),
         BotCommand("result", "Latest race result with DNF reasons"),
-        BotCommand("grid", "Starting grid graphic with penalties"),
+        BotCommand("grid", "Starting grid graphic, this weekend or any past race"),
         BotCommand("teammates", "Norris vs Piastri team-mate battle"),
         BotCommand("title", "Championship maths for McLaren"),
         BotCommand("pace", "McLaren race pace and upgrade watch"),
