@@ -34,8 +34,9 @@ def get_tavily_client() -> AsyncTavilyClient:
     return _client
 
 
-async def search(query: str, max_results: int = 5) -> list[dict]:
-    """Run a Tavily search; return [] on timeout or any error."""
+async def search(query: str, max_results: int = 5, domains: list[str] | None = None) -> list[dict]:
+    """Run a Tavily search over ``domains`` (the F1 news sites by default);
+    return [] on timeout or any error."""
     try:
         client = get_tavily_client()
     except KeyError:
@@ -47,7 +48,7 @@ async def search(query: str, max_results: int = 5) -> list[dict]:
             client.search(
                 query=query,
                 search_depth="advanced",
-                include_domains=ALLOWED_DOMAINS,
+                include_domains=domains or ALLOWED_DOMAINS,
                 max_results=max_results,
             ),
             timeout=_SEARCH_TIMEOUT_SECONDS,
